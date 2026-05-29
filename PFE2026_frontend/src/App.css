@@ -1,0 +1,120 @@
+:root { font-family: system-ui, Arial, sans-serif; }
+body { margin: 0; background: #0b1220; color: #e8eefc; }
+
+.container {
+  width: min(980px, 92vw);
+  margin: 0 auto;
+  padding: 24px 0 48px;
+}
+
+.card {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 16px;
+  padding: 18px;
+  backdrop-filter: blur(8px);
+}
+
+.btnRow { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+button {
+  cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.10);
+  color: #e8eefc;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+button:hover { background: rgba(255,255,255,0.16); }
+
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(0,0,0,0.20);
+  color: #e8eefc;
+  outline: none;
+}
+.label { font-size: 13px; opacity: 0.85; margin: 10px 0 6px; }
+
+/* HERO animation */
+.hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: linear-gradient(180deg, #122044, #0b1220);
+  height: 300px;
+}
+
+.road {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: 0;
+  height: 90px;
+  background: #141a26;
+  border-top: 2px solid rgba(255,255,255,0.10);
+}
+
+.roadLine {
+  position: absolute;
+  left: -20%;
+  bottom: 42px;
+  width: 140%;
+  height: 6px;
+  background: repeating-linear-gradient(
+    to right,
+    rgba(255,255,255,0.7) 0 28px,
+    rgba(255,255,255,0) 28px 56px
+  );
+  opacity: 0.65;
+  animation: moveLine 1.2s linear infinite;
+}
+
+@keyframes moveLine {
+  from { transform: translateX(0); }
+  to { transform: translateX(-56px); }
+}
+
+.truck {
+  position: absolute;
+  bottom: 24px;
+  left: -80px;
+  font-size: 54px; /* emoji truck */
+  animation: drive 3.6s ease-in-out infinite;
+  filter: drop-shadow(0 8px 10px rgba(0,0,0,0.35));
+}
+
+@keyframes drive {
+  0% { transform: translateX(0) translateY(0) scaleX(-1); }
+  45% { transform: translateX(58vw) translateY(-2px) scaleX(-1); }
+  100% { transform: translateX(120vw) translateY(0) scaleX(-1); }
+}
+
+.brand {
+  position: absolute;
+  top: 34%;
+  width: 100%;
+  text-align: center;
+  font-size: clamp(30px, 4.2vw, 54px);
+  font-weight: 900;
+  letter-spacing: 1px;
+  opacity: 0;
+  transform: translateY(10px) scale(0.98);
+  animation: reveal 900ms ease forwards;
+  animation-delay: 900ms;
+  text-shadow: 0 14px 30px rgba(0,0,0,0.35);
+}
+
+@keyframes reveal {
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.subtitle {
+  position: absolute;
+  top: 58%;
+  width: 100%;
+  text-align: center;
+  opacity: 0.85;
+}

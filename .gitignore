@@ -1,0 +1,97 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Local assistant/tooling state
+.agents/
+.codex/
+skills-lock.json
+
+# Dependencies and virtual environments
+node_modules/
+venv/
+.venv/
+env/
+.envrc
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# JavaScript / Vite
+dist/
+build/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+local.properties
+coverage/
+
+# Certificates and signing keys
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+key.properties
+
+# Native/mobile build output
+**/build/
+**/.gradle/
+**/DerivedData/
+
+# Logs and runtime files
+*.log
+*.err.log
+*.out
+*.pid
+
+# Local databases, dumps, and generated backups
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+PFE2026-backend/backups/
+
+# Archives and packaged exports
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+
+# Local video media
+*.mp4
+*.mov
+*.webm
+*.avi
+*.mkv
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Expo
+.expo/
