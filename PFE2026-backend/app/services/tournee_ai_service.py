@@ -98,12 +98,19 @@ GOVERNORATE_COORDS = {
 def clean_region(value):
     if not value:
         return "Sans Région"
+
     value = str(value).strip().lower()
+
+    value = value.replace("_", " ")
+    value = value.replace("-", " ")
+
     value = value.replace("gouvernorat de", "")
     value = value.replace("gouvernorat", "")
     value = value.replace("governorate", "")
     value = value.replace("ولاية", "")
+
     value = re.sub(r"\s+", " ", value).strip()
+
     return value.title()
 
 
@@ -209,6 +216,8 @@ def distance_between_regions(region_a, region_b):
         return 999999
     return haversine_distance_km(coords_a[0], coords_a[1], coords_b[0], coords_b[1])
 
+def volume_total_colis(colis_list):
+    return sum(float(c.get("volume") or 0) for c in colis_list)
 
 def poids_total_colis(colis_list):
     return sum(float(c.get("poids") or 0) for c in colis_list)
@@ -485,25 +494,35 @@ def get_preferred_group_for_gov(gouvernorat):
     return [gouvernorat]
 
 
-def can_merge_zones(zone_a, zone_b, vehicle_capacity):
+def can_merge_zones(zone_a, zone_b, vehicle_capacity, vehicle_volume_capacity=None):
     merged = zone_a + zone_b
+
     if len(merged) > MAX_COLIS_PAR_TOURNEE:
         return False
+
     if poids_total_colis(merged) > vehicle_capacity:
         return False
+
+    if vehicle_volume_capacity and vehicle_volume_capacity > 0:
+        if volume_total_colis(merged) > vehicle_volume_capacity:
+            return False
+
     if not can_merge_by_preferred_group(zone_a, zone_b):
         return False
+
     gouvernorats = list(set(
         clean_region(c.get("gouvernorat")) for c in merged if c.get("gouvernorat")
     ))
+
     if len(gouvernorats) > MAX_GOUVERNORATS_PAR_TOURNEE:
         return False
+
     for i in range(len(gouvernorats)):
         for j in range(i + 1, len(gouvernorats)):
             if distance_between_regions(gouvernorats[i], gouvernorats[j]) > MAX_GOV_DISTANCE_IN_TOURNEE_KM:
                 return False
-    return True
 
+    return True
 
 def merge_same_gouvernorat_zones(zones, vehicle_capacity):
     grouped = {}
@@ -611,35 +630,48 @@ def get_ordered_gouvernorats_for_group(group_key, gov_map):
     return sorted(gov_map.keys())
 
 
-def split_big_gouvernorat_if_needed(colis_gov, vehicle_capacity):
+def split_big_gouvernorat_if_needed(colis_gov, vehicle_capacity, vehicle_volume_capacity=None):
     colis_gov = sorted(
         colis_gov,
         key=lambda c: (c.get("latitude") or 0, c.get("longitude") or 0, c["id"]),
     )
+
     zones = []
     current_zone = []
     current_weight = 0
+    current_volume = 0
 
     for c in colis_gov:
         poids = float(c.get("poids") or 0)
+        volume = float(c.get("volume") or 0)
+
         should_split = (
             current_zone
             and (
                 len(current_zone) >= MAX_COLIS_PAR_TOURNEE
                 or current_weight + poids > vehicle_capacity
+                or (
+                    vehicle_volume_capacity
+                    and vehicle_volume_capacity > 0
+                    and current_volume + volume > vehicle_volume_capacity
+                )
             )
         )
+
         if should_split:
             zones.append(current_zone)
             current_zone = []
             current_weight = 0
+            current_volume = 0
+
         current_zone.append(c)
         current_weight += poids
+        current_volume += volume
 
     if current_zone:
         zones.append(current_zone)
-    return zones
 
+    return zones
 
 def creer_zones_par_adresses(colis, vehicle_capacity):
     colis_valides = [
@@ -855,6 +887,10 @@ def prepare_colis_data(db: Session):
             "depot_depart": depot_depart,
             "priorite":    getattr(c, "priorite_colis", None) or "normal",
             "sensibilite": getattr(c, "sensibilite_colis", None) or "standard",
+            "longueur": float(c.longueur or 0),
+            "largeur": float(c.largeur or 0),
+            "hauteur": float(c.hauteur or 0),
+            "volume": float(c.longueur or 0) * float(c.largeur or 0) * float(c.hauteur or 0),
         })
     return colis
 
@@ -959,18 +995,43 @@ def prepare_vehicles(db: Session):
         .order_by(Vehicle.id)
         .all()
     )
+
     vehicles = []
+
     for v in vehicles_rows:
         max_capacity = float(v.max_length or 0)
         if max_capacity <= 0:
             continue
+
+        longueur = float(getattr(v, "longueur", None) or 0)
+        largeur = float(getattr(v, "largeur", None) or 0)
+        hauteur = float(getattr(v, "hauteur", None) or 0)
+
+        max_volume = float(getattr(v, "max_volume", None) or 0)
+
+        # Si max_volume n'est pas rempli mais les dimensions existent,
+        # on le calcule automatiquement.
+        if max_volume <= 0 and longueur > 0 and largeur > 0 and hauteur > 0:
+            max_volume = longueur * largeur * hauteur
+
         vehicles.append({
-            "id":           v.id,
-            "name":         v.name,
-            "matricule":    v.matricule,
+            "id": v.id,
+            "name": v.name,
+            "matricule": v.matricule,
+
+            # Capacité poids en kg
             "min_capacity": float(v.min_length or 0),
             "max_capacity": max_capacity,
+
+            # Dimensions internes du véhicule en cm
+            "longueur": longueur,
+            "largeur": largeur,
+            "hauteur": hauteur,
+
+            # Capacité volume en cm³
+            "max_volume": max_volume,
         })
+
     return vehicles
 
 def normalize_refuse_reason(reason):
@@ -1170,24 +1231,70 @@ def choose_livreur_alternative(
     return candidates[0][1]
 
 
-def choose_vehicle_for_zone(vehicles, zone_weight):
-    fitting = [v for v in vehicles if zone_weight <= v["max_capacity"]]
+def choose_vehicle_for_zone(vehicles, zone_weight, zone_volume=0, used_vehicle_ids=None):
+    """
+    Choisit le plus petit véhicule actif disponible capable de porter:
+    - le poids total de la zone
+    - le volume total de la zone
+
+    used_vehicle_ids empêche d'utiliser le même véhicule dans plusieurs tournées
+    pendant la même génération.
+    """
+    used_vehicle_ids = used_vehicle_ids or set()
+    fitting = []
+
+    for v in vehicles:
+        if v["id"] in used_vehicle_ids:
+            continue
+
+        max_weight = float(v.get("max_capacity") or 0)
+        max_volume = float(v.get("max_volume") or 0)
+
+        if zone_weight > max_weight:
+            continue
+
+        if max_volume > 0 and zone_volume > max_volume:
+            continue
+
+        fitting.append(v)
 
     if not fitting:
-        print(f"AUCUN VEHICULE pour {zone_weight}kg")
+        print(
+            f"AUCUN VEHICULE DISPONIBLE pour poids={zone_weight}kg "
+            f"| volume={zone_volume}cm3 | used={list(used_vehicle_ids)}"
+        )
         return None
 
-    exact = [v for v in fitting if zone_weight >= v["min_capacity"]]
-    if exact:
-        return min(exact, key=lambda v: v["max_capacity"])
+    exact = [
+        v for v in fitting
+        if zone_weight >= float(v.get("min_capacity") or 0)
+    ]
 
-    best = min(fitting, key=lambda v: v["max_capacity"])
-    print(
-        f"VEHICULE SOUS-CAPACITE: poids={zone_weight}kg, "
-        f"vehicle={best['name']} min={best['min_capacity']}kg"
+    candidates = exact or fitting
+
+    selected = min(
+        candidates,
+        key=lambda v: (
+            float(v.get("max_capacity") or 999999999),
+            float(v.get("max_volume") or 999999999999),
+        )
     )
-    return best
 
+    if not exact:
+        print(
+            f"VEHICULE SOUS-CAPACITE: poids={zone_weight}kg, "
+            f"volume={zone_volume}cm3, "
+            f"vehicle={selected['name']} min={selected['min_capacity']}kg"
+        )
+
+    print(
+        f"VEHICULE CHOISI: {selected['name']} | id={selected['id']} | "
+        f"poids={round(float(zone_weight or 0), 1)}kg | "
+        f"volume={round(float(zone_volume or 0), 1)}cm3 | "
+        f"used_before={list(used_vehicle_ids)}"
+    )
+
+    return selected
 
 def is_vehicle_refused(vehicle, depot_key, region_label, refused_rules):
     current_depot = str(depot_key or "").lower().strip()
@@ -1215,10 +1322,14 @@ def choose_vehicle_alternative_if_refused(
     vehicle,
     vehicles,
     zone_weight,
+    zone_volume,
     depot_key,
     region_label,
     refused_rules,
+    used_vehicle_ids=None,
 ):
+    used_vehicle_ids = used_vehicle_ids or set()
+
     if vehicle is None:
         return None
 
@@ -1230,27 +1341,53 @@ def choose_vehicle_alternative_if_refused(
     ):
         return vehicle
 
-    candidates = [
-        v for v in vehicles
-        if v["id"] != vehicle["id"]
-        and zone_weight <= v["max_capacity"]
-        and not is_vehicle_refused(
+    candidates = []
+
+    for v in vehicles:
+        if v["id"] == vehicle["id"]:
+            continue
+
+        if v["id"] in used_vehicle_ids:
+            continue
+
+        if zone_weight > float(v.get("max_capacity") or 0):
+            continue
+
+        max_volume = float(v.get("max_volume") or 0)
+        if max_volume > 0 and zone_volume > max_volume:
+            continue
+
+        if is_vehicle_refused(
             vehicle=v,
             depot_key=depot_key,
             region_label=region_label,
             refused_rules=refused_rules,
-        )
-    ]
+        ):
+            continue
+
+        candidates.append(v)
 
     if not candidates:
         print(
             f"AUCUN VEHICULE ALTERNATIF DISPONIBLE: "
-            f"region={region_label} | depot={depot_key} | poids={zone_weight}kg"
+            f"region={region_label} | depot={depot_key} | "
+            f"poids={zone_weight}kg | volume={zone_volume}cm3 | "
+            f"used={list(used_vehicle_ids)}"
         )
         return None
 
-    exact = [v for v in candidates if zone_weight >= v["min_capacity"]]
-    selected = min(exact or candidates, key=lambda v: v["max_capacity"])
+    exact = [
+        v for v in candidates
+        if zone_weight >= float(v.get("min_capacity") or 0)
+    ]
+
+    selected = min(
+        exact or candidates,
+        key=lambda v: (
+            float(v.get("max_capacity") or 999999999),
+            float(v.get("max_volume") or 999999999999),
+        )
+    )
 
     print(
         f"VEHICULE ALTERNATIF CHOISI: "
@@ -1259,7 +1396,6 @@ def choose_vehicle_alternative_if_refused(
     )
 
     return selected
-
 
 def choose_livreur_for_region(
     livreurs,
@@ -1358,9 +1494,14 @@ def generate_tournees_ai(db: Session, execution_date=None):
     results            = []
     assigned_colis_ids = set()
     used_livreur_ids   = set()
+    used_vehicle_ids   = set()
     warnings = []
     numero_tournee     = 1
     max_vehicle_capacity = max(v["max_capacity"] for v in vehicles)
+    max_vehicle_volume = max(
+        float(v.get("max_volume") or 0)
+        for v in vehicles
+    )
 
     # ── Helper: build all zones from a colis pool ─────────────────────────────
     def build_all_zones(colis_pool):
@@ -1369,6 +1510,10 @@ def generate_tournees_ai(db: Session, execution_date=None):
             if c.get("latitude") is not None
             and c.get("longitude") is not None
             and float(c.get("poids") or 0) <= max_vehicle_capacity
+            and (
+                max_vehicle_volume <= 0
+                or float(c.get("volume") or 0) <= max_vehicle_volume
+            )
         ]
         if not colis_valides:
             return [], []
@@ -1386,14 +1531,20 @@ def generate_tournees_ai(db: Session, execution_date=None):
             ordered_govs = get_ordered_gouvernorats_for_group(group_key, gov_map)
             units = []
             for gov in ordered_govs:
-                units.extend(split_big_gouvernorat_if_needed(gov_map[gov], max_vehicle_capacity))
+                units.extend(
+                    split_big_gouvernorat_if_needed(
+                        gov_map[gov],
+                        max_vehicle_capacity,
+                        max_vehicle_volume,
+                    )
+                )
 
             current_zone = []
             for unit in units:
                 if not current_zone:
                     current_zone = list(unit)
                     continue
-                if can_merge_zones(current_zone, unit, max_vehicle_capacity):
+                if can_merge_zones(current_zone, unit, max_vehicle_capacity, max_vehicle_volume):
                     current_zone.extend(unit)
                 else:
                     (valid_zones if len(current_zone) >= MIN_COLIS_POUR_TOURNEE else small_zones).append(current_zone)
@@ -1404,12 +1555,32 @@ def generate_tournees_ai(db: Session, execution_date=None):
         valid_zones.sort(key=lambda z: (-len(z), -poids_total_colis(z)))
         return valid_zones, small_zones
 
+    def apply_lifo_loading_order(ordered_colis):
+        """
+        ordered_colis = ordre livraison
+        loading_order = ordre chargement camion
+
+        LIFO:
+        premier colis à livrer = dernier colis chargé
+        """
+        delivery_order = list(ordered_colis)
+        loading_order = list(reversed(delivery_order))
+
+        return delivery_order, loading_order
+
+
     # ── Helper: turn a zone into a tournée ────────────────────────────────────
     def try_create_tournee(colis_zone, accept_low_weight=False):
         nonlocal numero_tournee
 
         zone_weight = poids_total_colis(colis_zone)
-        vehicle = choose_vehicle_for_zone(vehicles, zone_weight)
+        zone_volume = volume_total_colis(colis_zone)
+        vehicle = choose_vehicle_for_zone(
+            vehicles,
+            zone_weight,
+            zone_volume,
+            used_vehicle_ids,
+        )
 
         if vehicle is None:
             print(f"AUCUN VEHICULE ADAPTE pour zone poids={zone_weight}kg")
@@ -1439,9 +1610,11 @@ def generate_tournees_ai(db: Session, execution_date=None):
             vehicle=vehicle,
             vehicles=vehicles,
             zone_weight=zone_weight,
+            zone_volume=zone_volume,
             depot_key=depot_key,
             region_label=gouvernorat_label_tmp,
             refused_rules=refused_rules,
+            used_vehicle_ids=used_vehicle_ids,
         )
 
         if vehicle is None:
@@ -1499,6 +1672,8 @@ def generate_tournees_ai(db: Session, execution_date=None):
             c for c in resultat["ordered_colis"]
             if c["id"] not in assigned_colis_ids
         ]
+
+        ordered_colis, loading_order = apply_lifo_loading_order(ordered_colis)
 
         if len(ordered_colis) < MIN_COLIS_POUR_TOURNEE:
             print(
@@ -1593,14 +1768,24 @@ def generate_tournees_ai(db: Session, execution_date=None):
             "colis": [],
         }
 
+        loading_order_map = {
+            c["id"]: index
+            for index, c in enumerate(loading_order, start=1)
+        }
+
         for ordre, c in enumerate(ordered_colis, start=1):
             tournee["colis"].append({
                 "colis_id": c["id"],
                 "ordre": ordre,
+                "ordre_chargement": loading_order_map.get(c["id"]),
                 "distance_depuis_precedent": 0,
                 "latitude": c["latitude"],
                 "longitude": c["longitude"],
                 "adresse": c["adresse"],
+                "longueur": c.get("longueur"),
+                "largeur": c.get("largeur"),
+                "hauteur": c.get("hauteur"),
+                "volume": c.get("volume"),
             })
 
             assigned_colis_ids.add(c["id"])
@@ -1608,8 +1793,16 @@ def generate_tournees_ai(db: Session, execution_date=None):
         print(
             f"TOURNEE CREEE: {tournee['nom']} | "
             f"{len(ordered_colis)} colis | {poids_total}kg | "
-            f"vehicle={vehicle['name']} | depot={depot_key} | "
-            f"livreur={livreur['name']}"
+            f"volume={round(volume_total_colis(ordered_colis), 1)}cm3 | "
+            f"vehicle={vehicle['name']} | "
+            f"vehicle_volume={round(float(vehicle.get('max_volume') or 0), 1)}cm3 | "
+            f"depot={depot_key} | livreur={livreur['name']}"
+        )
+
+        used_vehicle_ids.add(vehicle["id"])
+        print(
+            f"VEHICULE MARQUE UTILISE: {vehicle['name']} | "
+            f"used={list(used_vehicle_ids)}"
         )
 
         numero_tournee += 1

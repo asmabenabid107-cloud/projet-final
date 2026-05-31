@@ -42,42 +42,42 @@ const STAT_CONFIG = [
   {
     key: "total",
     label: "Total colis",
-    noClick: true,
+    noClick: false,
     colorVal: "#2563eb",
     bgIco: "#eff6ff",
   },
   {
     key: "en_attente",
     label: "En attente",
-    noClick: true,
+    noClick: false,
     colorVal: "#b45309",
     bgIco: "#fffbeb",
   },
   {
     key: "en_transit",
     label: "En transit",
-    noClick: true,
+    noClick: false,
     colorVal: "#2563eb",
     bgIco: "#eff6ff",
   },
   {
     key: "a_relivrer",
     label: "A relivrer",
-    noClick: true,
+    noClick: false,
     colorVal: "#f97316",
     bgIco: "#fff7ed",
   },
   {
     key: "livre",
     label: "Livrés",
-    noClick: true,
+    noClick: false,
     colorVal: "#15803d",
     bgIco: "#f0fdf4",
   },
   {
     key: "retour",
     label: "Retour",
-    noClick: true,
+    noClick: false,
     colorVal: "#6d28d9",
     bgIco: "#f5f3ff",
   },
@@ -502,6 +502,7 @@ export default function Dashboard() {
 
   const filteredColis = useMemo(() => {
     if (!activeStatut) return [];
+    if (activeStatut === "total") return colisList;
     if (activeStatut === "a_relivrer") return colisList.filter(isRelivrerTomorrow);
 
     return colisList.filter(
@@ -519,6 +520,11 @@ export default function Dashboard() {
   );
 
   const showingNotifs = activeStatut === null;
+
+  const activeStatLabel =
+    STAT_CONFIG.find((item) => item.key === activeStatut)?.label ||
+    STATUS_META[activeStatut]?.label ||
+    "";
 
   const userName = user?.name || "Expéditeur";
   const nom = user?.name || "Expéditeur";
@@ -754,17 +760,29 @@ export default function Dashboard() {
                 return (
                   <div
                     key={stat.key}
-                    className={`dash-sc${stat.noClick ? " no-click" : ""}${
-                      isActive ? " active" : ""
-                    }`}
-                    style={
-                      isActive
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      setActiveStatut((prev) => (prev === stat.key ? null : stat.key));
+                      setColisPage(1);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setActiveStatut((prev) => (prev === stat.key ? null : stat.key));
+                        setColisPage(1);
+                      }
+                    }}
+                    className={`dash-sc${isActive ? " active" : ""}`}
+                    style={{
+                      cursor: "pointer",
+                      ...(isActive
                         ? {
-                            borderColor: meta?.border,
-                            background: meta?.bg,
+                            borderColor: meta?.border || stat.colorVal,
+                            background: meta?.bg || stat.bgIco,
                           }
-                        : {}
-                    }
+                        : {}),
+                    }}
                   >
                     <div
                       className="dash-sc-ico"
@@ -793,7 +811,7 @@ export default function Dashboard() {
                   <div className="dash-notif-title">
                     {showingNotifs
                       ? "Notifications"
-                      : `Colis — ${STATUS_META[activeStatut]?.label}`}
+                      : `Colis — ${activeStatLabel}`}
                   </div>
 
                   <div className="dash-notif-sub">

@@ -112,6 +112,21 @@ function depotStyle(value) {
   };
 }
 
+function formatDimensionNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return null;
+  return Number.isInteger(number) ? String(number) : number.toFixed(1);
+}
+
+function formatDimensions(colis) {
+  const longueur = formatDimensionNumber(colis?.longueur);
+  const largeur = formatDimensionNumber(colis?.largeur);
+  const hauteur = formatDimensionNumber(colis?.hauteur);
+
+  if (!longueur || !largeur || !hauteur) return "Non définies";
+  return `${longueur} × ${largeur} × ${hauteur} cm`;
+}
+
 export default function AdminColis() {
   const [colisList, setColisList] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -148,41 +163,50 @@ export default function AdminColis() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const handleApprove = async (id, numero) => {
-    setActionLoading(id + "_approve");
+  const handleApprove = async (event, id, numero) => {
+  event?.preventDefault();
+  event?.stopPropagation();
 
-    try {
-      await api.post(`/admin/colis/${id}/approve`);
-      await loadColis();
+  setActionLoading(id + "_approve");
 
-      // important: ما نبدلوش activeTab
-      setExpanded(null);
-      showToast(`Colis ${numero} confirmé`);
-    } catch (err) {
-      console.error(err);
-      showToast("Erreur lors de la confirmation", "error");
-    } finally {
-      setActionLoading(null);
-    }
-  };
+  try {
+    await api.post(`/admin/colis/${id}/approve`);
+    await loadColis();
 
-  const handleReject = async (id, numero) => {
-    setActionLoading(id + "_reject");
+    // يبقى في نفس الصفحة ونفس التبويب
+    setExpanded(null);
+    showToast(`Colis ${numero} confirmé`);
+  } catch (err) {
+    console.error(err);
+    showToast("Erreur lors de la confirmation", "error");
+  } finally {
+    setActionLoading(null);
+  }
+};
 
-    try {
-      await api.post(`/admin/colis/${id}/reject`);
-      await loadColis();
+const handleReject = async (event, id, numero) => {
+  event?.preventDefault();
+  event?.stopPropagation();
 
-      // important: ما نبدلوش activeTab
-      setExpanded(null);
-      showToast(`Colis ${numero} refusé`, "error");
-    } catch (err) {
-      console.error(err);
-      showToast("Erreur lors du refus", "error");
-    } finally {
-      setActionLoading(null);
-    }
-  };
+  setActionLoading(id + "_reject");
+
+  try {
+    await api.post(`/admin/colis/${id}/reject`);
+    await loadColis();
+
+    // يبقى في نفس الصفحة ونفس التبويب
+    setExpanded(null);
+    showToast(`Colis ${numero} refusé`, "error");
+  } catch (err) {
+    console.error(err);
+    showToast("Erreur lors du refus", "error");
+  } finally {
+    setActionLoading(null);
+  }
+};
+  
+
+
 
   const toggleExpand = (id) => {
     setExpanded((prev) => (prev === id ? null : id));
@@ -669,6 +693,7 @@ export default function AdminColis() {
                   }}
                 >
                   <button
+                  type="button"
                     onClick={() => toggleExpand(colis.id)}
                     style={{
                       width: 28,
@@ -725,7 +750,7 @@ export default function AdminColis() {
                       lineHeight: 1.45,
                     }}
                   >
-                    {colis.adresse_livraison || "-"}
+                    
                   </div>
 
                   <div
@@ -739,9 +764,10 @@ export default function AdminColis() {
                   >
                     {canValidate ? (
                       <>
-                        <button
-                          onClick={() => handleApprove(colis.id, colis.numero_suivi)}
-                          disabled={actionLoading !== null}
+                       <button
+  type="button"
+  onClick={(e) => handleApprove(e, colis.id, colis.numero_suivi)}
+  disabled={actionLoading !== null}
                           style={{
                             padding: "9px 16px",
                             borderRadius: 12,
@@ -761,8 +787,9 @@ export default function AdminColis() {
                         </button>
 
                         <button
-                          onClick={() => handleReject(colis.id, colis.numero_suivi)}
-                          disabled={actionLoading !== null}
+  type="button"
+  onClick={(e) => handleReject(e, colis.id, colis.numero_suivi)}
+  disabled={actionLoading !== null}
                           style={{
                             padding: "9px 16px",
                             borderRadius: 12,

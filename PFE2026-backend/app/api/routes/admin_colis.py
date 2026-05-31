@@ -37,7 +37,12 @@ def get_all_colis(db: Session = Depends(get_db), admin: User = Depends(require_a
             for column in Colis.__table__.columns
         }
 
-        # ColisResponse يستنى ouvrir_colis = "oui" ولا "non"
+        # Dimensions colis pour affichage admin
+        item["longueur"] = c.longueur
+        item["largeur"] = c.largeur
+        item["hauteur"] = c.hauteur
+
+        # ColisResponse attend ouvrir_colis = "oui" ou "non"
         ouvrir_value = getattr(c, "ouvrir_colis", None)
 
         if ouvrir_value in [True, "true", "True", "oui", "1", 1]:
@@ -45,18 +50,17 @@ def get_all_colis(db: Session = Depends(get_db), admin: User = Depends(require_a
         else:
             item["ouvrir_colis"] = "non"
 
-        # ColisResponse يستنى datetime، ما ينجمش يقبل NULL
+        # ColisResponse attend datetime non NULL
         item["created_at"] = c.created_at or now
+        item["updated_at"] = c.updated_at or item["created_at"]
 
-        if "updated_at" in item:
-            item["updated_at"] = c.updated_at or item["created_at"]
-
-        # كان schema فيه history
         item["history"] = c.history or []
 
         result.append(item)
 
     return result
+
+
 
 
 @router.post("/{colis_id}/approve")

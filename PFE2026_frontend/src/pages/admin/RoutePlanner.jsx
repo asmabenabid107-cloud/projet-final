@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import tourneeService from "../../api/tourneeService";
 
 const STATUS_META = {
@@ -774,6 +775,19 @@ const routePlannerCss = `
   margin-top: 18px;
 }
 
+.rp-stat-card-link {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.rp-stat-card-link:hover {
+  transform: translateY(-2px);
+  border-color: rgba(110,168,255,0.38);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.10);
+}
+
 .rp-toast {
   position: fixed;
   top: 22px;
@@ -789,6 +803,19 @@ const routePlannerCss = `
   line-height: 1.45;
   box-shadow: 0 18px 45px rgba(15,23,42,0.18);
   animation: rpToastIn .25s ease;
+}
+  .rp-stat-card-link .rp-stat-value {
+  font-size: 20px;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.rp-stat-card-link {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-primary);
+  white-space: nowrap;
 }
 
 .rp-toast-title {
@@ -854,12 +881,38 @@ const routePlannerCss = `
   .rp-card {
     min-height: 170px;
   }
+
+
 }
 `;
 
+function getTunisiaDate(offsetDays = 0) {
+  // Tunisie = UTC+1. On travaille en UTC après ajout de +1h
+  // باش date ما تتبدلش بالغلط حسب timezone متاع browser.
+  const tunisiaNow = new Date(Date.now() + 60 * 60 * 1000);
+  tunisiaNow.setUTCDate(tunisiaNow.getUTCDate() + offsetDays);
+  return tunisiaNow.toISOString().split("T")[0];
+}
+
 function getTodayTunisia() {
-  const now = new Date(Date.now() + 60 * 60 * 1000);
-  return now.toISOString().split("T")[0];
+  return getTunisiaDate(0);
+}
+
+function getTomorrowTunisia() {
+  return getTunisiaDate(1);
+}
+
+function isAfterTodayLimitTunisia() {
+  const tunisiaNow = new Date(Date.now() + 60 * 60 * 1000);
+  const hour = tunisiaNow.getUTCHours();
+  const minute = tunisiaNow.getUTCMinutes();
+
+  // Après 07:30 du matin, admin ماعادش ينجم يختار اليوم.
+  return hour > 7 || (hour === 7 && minute >= 30);
+}
+
+function getDefaultExecutionDate() {
+  return isAfterTodayLimitTunisia() ? getTomorrowTunisia() : getTodayTunisia();
 }
 
 function getDayLabel(dateStr) {
@@ -877,6 +930,26 @@ function getDayLabel(dateStr) {
   return `${fullDays[d.getDay()]} ${dateStr}`;
 }
 
+function getStops(tournee) {
+  return Array.isArray(tournee?.stops) ? tournee.stops : [];
+}
+
+function formatDimensions(stop) {
+  const l = stop?.longueur;
+  const w = stop?.largeur;
+  const h = stop?.hauteur;
+  if (!l || !w || !h) return "Dimensions non définies";
+  return `${l} × ${w} × ${h} cm`;
+}
+
+function sortByLivraison(stops) {
+  return [...stops].sort((a, b) => (Number(a.ordre) || 0) - (Number(b.ordre) || 0));
+}
+
+function sortByChargement(stops) {
+  return [...stops].sort((a, b) => (Number(a.ordre_chargement) || 999999) - (Number(b.ordre_chargement) || 999999));
+}
+
 export default function RoutePlanner() {
   const [tournees, setTournees] = useState([]);
   const [restants, setRestants] = useState([]);
@@ -884,43 +957,46 @@ export default function RoutePlanner() {
   const [selectedTournee, setSelectedTournee] = useState(null);
   const [msg, setMsg] = useState("");
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
   const [depotFilter, setDepotFilter] = useState("all");
-  const [executionDate, setExecutionDate] = useState(getTodayTunisia);
+  const [executionDate, setExecutionDate] = useState(getDefaultExecutionDate);
   const [toast, setToast] = useState("");
+  const navigate = useNavigate();
 
-  const parcoursSteps = useMemo(
-    () => parseParcours(selectedTournee?.parcours_text || ""),
+  const deliveryStops = useMemo(
+    () => sortByLivraison(getStops(selectedTournee)),
     [selectedTournee]
   );
 
-  const depotList = useMemo(() => extractDepots(tournees), [tournees]);
+  const loadingStops = useMemo(
+    () => sortByChargement(getStops(selectedTournee)),
+    [selectedTournee]
+  );
+
+
+  const proposedTournees = useMemo(
+    () => tournees.filter((t) => t.status === "proposed"),
+    [tournees]
+  );
+
+  const depotList = useMemo(() => extractDepots(proposedTournees), [proposedTournees]);
 
   const stats = useMemo(() => {
-    const total = tournees.length;
-    const proposed = tournees.filter((t) => t.status === "proposed").length;
-    const accepted = tournees.filter((t) => t.status === "accepted").length;
-    const refused = tournees.filter((t) => t.status === "refused").length;
-    const totalColis = tournees.reduce(
+    const total = proposedTournees.length;
+    const totalColis = proposedTournees.reduce(
       (s, t) => s + (Number(t.nombre_colis) || 0),
       0
     );
-    const totalPoids = tournees.reduce(
+    const totalPoids = proposedTournees.reduce(
       (s, t) => s + (Number(t.poids_total) || 0),
       0
     );
-    return { total, proposed, accepted, refused, totalColis, totalPoids };
-  }, [tournees]);
+    return { total, totalColis, totalPoids };
+  }, [proposedTournees]);
 
   const filteredTournees = useMemo(() => {
     const q = query.trim().toLowerCase();
 
-    return tournees.filter((t) => {
-      const matchStatus =
-        statusFilter === "all"
-          ? t.status !== "refused"
-          : t.status === statusFilter;
-
+    return proposedTournees.filter((t) => {
       const matchDepot =
         depotFilter === "all" ||
         normalizeDepot(t.depot_label || t.depot_depart || "") ===
@@ -938,9 +1014,9 @@ export default function RoutePlanner() {
         .join(" ")
         .toLowerCase();
 
-      return matchStatus && matchDepot && (!q || text.includes(q));
+      return matchDepot && (!q || text.includes(q));
     });
-  }, [tournees, query, statusFilter, depotFilter]);
+  }, [proposedTournees, query, depotFilter]);
 
   const showToast = (text) => {
     if (!text) return;
@@ -991,7 +1067,7 @@ export default function RoutePlanner() {
       await loadTournees();
     } catch (err) {
       console.error(err);
-      setMsg("Erreur génération IA.");
+      setMsg(err?.response?.data?.detail || "Erreur génération IA.");
       setRestants([]);
     } finally {
       setLoading(false);
@@ -1003,6 +1079,7 @@ export default function RoutePlanner() {
       await tourneeService.accept(id);
       setSelectedTournee(null);
       await loadTournees();
+      setMsg("Tournée acceptée et déplacée vers la page des tournées acceptées.");
     } catch (err) {
       console.error(err);
       setMsg("Erreur acceptation tournée.");
@@ -1066,7 +1143,8 @@ export default function RoutePlanner() {
               className="rp-date-input"
               type="date"
               value={executionDate}
-              min={getTodayTunisia()}
+              min={isAfterTodayLimitTunisia() ? getTomorrowTunisia() : getTodayTunisia()}
+              max={getTomorrowTunisia()}
               onChange={(e) => setExecutionDate(e.target.value)}
             />
           </div>
@@ -1081,46 +1159,34 @@ export default function RoutePlanner() {
           </button>
 
           <div className="rp-rest-note">
-            Les livreurs en repos ce jour sont exclus automatiquement.
+            {isAfterTodayLimitTunisia()
+              ? "Après 07:30, la génération est disponible uniquement pour demain."
+              : "Vous pouvez générer les tournées pour aujourd’hui ou demain. Après 07:30, seul demain reste disponible."}
           </div>
         </div>
       </section>
 
       <section className="rp-stats">
-        <StatCard label="Tournées" value={stats.total} />
-        <StatCard label="Colis planifiés" value={stats.totalColis} />
+        <StatCard label="Tournées proposées" value={stats.total} />
+        <StatCard label="Colis proposés" value={stats.totalColis} />
         <StatCard
-          label="Poids total"
+          label="Poids total proposé"
           value={`${formatNumber(stats.totalPoids)} kg`}
         />
-        <StatCard label="Proposées" value={stats.proposed} />
+        <StatCard
+  label="Acceptées"
+  value="Voir page acceptées"
+  clickable
+  onClick={() => navigate("/admin/tournees-accepted")}
+/>
       </section>
 
       <section className="rp-toolbar">
         <div className="rp-toolbar-row">
           <div className="rp-filters">
-            <button
-              type="button"
-              className={`rp-filter-chip ${
-                statusFilter === "all" ? "active" : ""
-              }`}
-              onClick={() => setStatusFilter("all")}
-            >
-              Toutes
+            <button type="button" className="rp-filter-chip active">
+              Tournées proposées
             </button>
-
-            {Object.entries(STATUS_META).map(([key, meta]) => (
-              <button
-                key={key}
-                type="button"
-                className={`rp-filter-chip ${
-                  statusFilter === key ? "active" : ""
-                }`}
-                onClick={() => setStatusFilter(key)}
-              >
-                {meta.short}
-              </button>
-            ))}
           </div>
 
           <input
@@ -1252,9 +1318,84 @@ export default function RoutePlanner() {
             {restants.map((group, index) => (
               <div key={`${group.region}-${index}`} className="rp-restant-card">
                 <div className="rp-restant-region">{group.region}</div>
+
                 <div className="rp-restant-count">
                   {group.count} colis non affectés
                 </div>
+
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontSize: 12,
+                    lineHeight: 1.45,
+                    color: "var(--text-secondary)",
+                    fontWeight: 750,
+                  }}
+                >
+                  {group.reason ||
+                    "Non affecté à cause des contraintes de génération IA."}
+                </div>
+
+                {Array.isArray(group.colis) && group.colis.length > 0 && (
+                  <details
+                    style={{
+                      marginTop: 10,
+                      borderTop: "1px solid rgba(245,158,11,0.20)",
+                      paddingTop: 8,
+                    }}
+                  >
+                    <summary
+                      style={{
+                        cursor: "pointer",
+                        fontSize: 12,
+                        fontWeight: 950,
+                        color: "#f59e0b",
+                      }}
+                    >
+                      Voir les colis concernés
+                    </summary>
+
+                    <div style={{ marginTop: 8, display: "grid", gap: 7 }}>
+                      {group.colis.slice(0, 6).map((c) => (
+                        <div
+                          key={c.id}
+                          style={{
+                            padding: "8px 9px",
+                            borderRadius: 12,
+                            background: "rgba(255,255,255,0.05)",
+                            border: "1px solid rgba(245,158,11,0.16)",
+                          }}
+                        >
+                          <div style={{ fontSize: 12, fontWeight: 950 }}>
+                            #{c.numero_suivi || c.id} · {formatNumber(c.poids)} kg
+                          </div>
+                          <div
+                            style={{
+                              marginTop: 3,
+                              fontSize: 11,
+                              color: "var(--text-secondary)",
+                              lineHeight: 1.4,
+                            }}
+                          >
+                            {c.adresse_livraison || "Adresse non définie"}
+                          </div>
+                        </div>
+                      ))}
+
+                      {group.colis.length > 6 && (
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: "var(--text-secondary)",
+                            fontWeight: 850,
+                          }}
+                        >
+                          +{group.colis.length - 6} autres colis
+                        </div>
+                      )}
+                    </div>
+                  </details>
+                )}
               </div>
             ))}
           </div>
@@ -1330,31 +1471,35 @@ export default function RoutePlanner() {
 
               <div className="rp-route-section">
                 <div className="rp-section-title">
-                  <strong>Parcours</strong>
+                  <strong>Parcours de livraison</strong>
                   <span
                     style={{
                       color: "var(--text-secondary)",
                       fontWeight: 850,
                     }}
                   >
-                    {parcoursSteps.length} étapes
+                    {deliveryStops.length} colis
                   </span>
                 </div>
 
-                {parcoursSteps.length > 0 ? (
+                {deliveryStops.length > 0 ? (
                   <div className="rp-route-list">
-                    {parcoursSteps.map((step) => (
-                      <div key={step.id} className="rp-step">
-                        <div className="rp-step-no">{step.id}</div>
+                    {deliveryStops.map((stop) => (
+                      <div key={`delivery-${stop.colis_id}`} className="rp-step">
+                        <div className="rp-step-no">{stop.ordre}</div>
                         <div className="rp-step-card">
                           <div className="rp-step-address">
-                            {step.adresse}
+                            {stop.adresse || "Adresse non définie"}
                           </div>
-                          {step.details && (
-                            <div className="rp-step-details">
-                              {step.details}
-                            </div>
-                          )}
+                          <div className="rp-step-details">
+                            Livraison #{stop.ordre} · Chargement camion #{stop.ordre_chargement || "-"}
+                          </div>
+                          <div className="rp-step-details">
+                            Dimensions : {formatDimensions(stop)}
+                          </div>
+                          <div className="rp-step-details">
+                            Poids : {formatNumber(stop.poids)} kg
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -1366,7 +1511,44 @@ export default function RoutePlanner() {
                       fontWeight: 800,
                     }}
                   >
-                    Aucun parcours disponible.
+                    Aucun détail colis disponible.
+                  </div>
+                )}
+              </div>
+
+              <div className="rp-route-section">
+                <div className="rp-section-title">
+                  <strong>Organisation du camion</strong>
+               
+                </div>
+
+                {loadingStops.length > 0 ? (
+                  <div className="rp-route-list">
+                    {loadingStops.map((stop) => (
+                      <div key={`loading-${stop.colis_id}`} className="rp-step">
+                        <div className="rp-step-no">{stop.ordre_chargement || "-"}</div>
+                        <div className="rp-step-card">
+                          <div className="rp-step-address">
+                            Charger colis {stop.numero_suivi ? `#${stop.numero_suivi}` : `#${stop.colis_id}`}
+                          </div>
+                          <div className="rp-step-details">
+                            Livraison prévue #{stop.ordre}
+                          </div>
+                          <div className="rp-step-details">
+                            Dimensions : {formatDimensions(stop)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      color: "var(--text-secondary)",
+                      fontWeight: 800,
+                    }}
+                  >
+                    Aucun ordre de chargement disponible.
                   </div>
                 )}
               </div>
@@ -1408,13 +1590,27 @@ export default function RoutePlanner() {
   );
 }
 
-function StatCard({ label, value }) {
-  return (
-    <div className="rp-stat-card">
+function StatCard({ label, value, clickable = false, onClick }) {
+  const content = (
+    <>
       <div className="rp-stat-label">{label}</div>
       <div className="rp-stat-value">{value}</div>
-    </div>
+    </>
   );
+
+  if (clickable) {
+    return (
+      <button
+        type="button"
+        className="rp-stat-card rp-stat-card-link"
+        onClick={onClick}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return <div className="rp-stat-card">{content}</div>;
 }
 
 function Info({ label, value }) {

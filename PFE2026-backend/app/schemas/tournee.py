@@ -5,6 +5,7 @@ from typing import List, Optional
 class TourneeColisOut(BaseModel):
     colis_id: int
     ordre: int
+    ordre_chargement: Optional[int] = None
     distance_depuis_precedent: float
 
     class Config:

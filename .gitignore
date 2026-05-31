@@ -95,3 +95,27 @@ Thumbs.db
 
 # Expo
 .expo/
+
+# Backend secrets
+.env
+*.env
+PFE2026-backend/.env
+
+# Mobile Android local config
+local.properties
+**/local.properties
+
+# Node / React
+node_modules/
+dist/
+build/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/

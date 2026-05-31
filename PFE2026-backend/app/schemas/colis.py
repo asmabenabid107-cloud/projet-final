@@ -29,6 +29,9 @@ class ColisBase(BaseModel):
     delegation: Optional[str] = None
     rue: Optional[str] = None
     destination_label: Optional[str] = None
+    longueur: Optional[float] = None
+    largeur: Optional[float] = None
+    hauteur: Optional[float] = None
 
 
 class ColisCreate(ColisBase):
@@ -53,6 +56,9 @@ class ColisUpdate(BaseModel):
     rue: Optional[str] = None
     destination_label: Optional[str] = None
     depot_depart: str | None = None
+    longueur: Optional[float] = None
+    largeur: Optional[float] = None
+    hauteur: Optional[float] = None
 
 
 class ColisHistoryEventResponse(BaseModel):

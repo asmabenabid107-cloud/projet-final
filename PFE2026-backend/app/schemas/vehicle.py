@@ -1,5 +1,6 @@
 from datetime import datetime
 import re
+from typing import Optional
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -43,6 +44,10 @@ class VehicleCreate(BaseModel):
     status: VehicleStatus = VehicleStatus.actif
     min_length: int = DEFAULT_MIN_WEIGHT
     max_length: int = DEFAULT_MAX_WEIGHT
+    longueur: Optional[float] = None
+    largeur: Optional[float] = None
+    hauteur: Optional[float] = None
+    max_volume: Optional[float] = None
 
     @field_validator("name")
     @classmethod
@@ -74,6 +79,10 @@ class VehicleUpdate(BaseModel):
     status: VehicleStatus | None = None
     min_length: int | None = None
     max_length: int | None = None
+    longueur: Optional[float] = None
+    largeur: Optional[float] = None
+    hauteur: Optional[float] = None
+    max_volume: Optional[float] = None
 
     @field_validator("name")
     @classmethod
@@ -112,6 +121,10 @@ class VehicleOut(BaseModel):
     status: VehicleStatus
     min_length: int
     max_length: int
+    longueur: Optional[float] = None
+    largeur: Optional[float] = None
+    hauteur: Optional[float] = None
+    max_volume: Optional[float] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

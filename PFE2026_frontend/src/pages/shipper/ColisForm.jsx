@@ -166,6 +166,9 @@ const INITIAL_FORM = {
   poids: "",
   statut: "en_attente",
   prix: "",
+  longueur: "",
+  largeur: "",
+  hauteur: "",
   priorite_colis: "normal",
   sensibilite_colis: "",
 };
@@ -283,10 +286,9 @@ const depotFromDashboard =
   );
 
   useEffect(() => {
-    if (isEdit) return;
     const auto = calculerPrix(form.poids);
     setForm((prev) => ({ ...prev, prix: auto }));
-  }, [form.poids, isEdit]);
+  }, [form.poids]);
 
   const prixLivraison = Number(form.prix) || 0;
   const prixTotalFinal = prixLivraison + totalProduits;
@@ -325,6 +327,9 @@ setForm({
   poids: data.poids ?? "",
   statut: data.statut || "en_attente",
   prix: data.prix ?? calculerPrix(data.poids),
+  longueur: data.longueur ?? "",
+  largeur: data.largeur ?? "",
+  hauteur: data.hauteur ?? "",
   priorite_colis: data.priorite_colis || "normal",
   sensibilite_colis: data.sensibilite_colis || "",
 });
@@ -364,6 +369,10 @@ setForm({
         return value.trim() ? null : "Adresse requise";
       case "poids":
         return !value || Number(value) <= 0 ? "Poids invalide" : null;
+      case "longueur":
+      case "largeur":
+      case "hauteur":
+        return value !== "" && Number(value) <= 0 ? "Valeur invalide" : null;
       default:
         return null;
     }
@@ -469,6 +478,12 @@ if (!form.rue.trim() && !form.adresse_livraison) {
 
     if (!form.poids || Number(form.poids) <= 0) e.poids = "Poids invalide";
 
+    ["longueur", "largeur", "hauteur"].forEach((field) => {
+      if (form[field] !== "" && Number(form[field]) <= 0) {
+        e[field] = "Valeur invalide";
+      }
+    });
+
     products.forEach((p) => {
       if (!p.nom.trim()) e[`p_${p._id}_nom`] = "Nom requis";
       if (!p.quantite || Number(p.quantite) < 1) e[`p_${p._id}_quantite`] = "≥ 1";
@@ -503,6 +518,9 @@ if (!form.rue.trim() && !form.adresse_livraison) {
           : ""),
       email_destinataire: form.email_destinataire || null,
       poids: Number(form.poids),
+      longueur: form.longueur === "" ? null : Number(form.longueur),
+      largeur: form.largeur === "" ? null : Number(form.largeur),
+      hauteur: form.hauteur === "" ? null : Number(form.hauteur),
       statut: form.statut,
       prix: Number(prixTotalFinal),
       prix_free: null,
@@ -1172,6 +1190,69 @@ if (!form.rue.trim() && !form.adresse_livraison) {
                 <span style={{ fontSize: "0.7rem", opacity: 0.45, marginTop: 4, display: "block" }}>
                   🔒 Géré par le livreur
                 </span>
+              </div>
+            </div>
+
+            <div
+              style={{
+                marginTop: 14,
+                paddingTop: 14,
+                borderTop: "1px solid rgba(255,255,255,.07)",
+              }}
+            >
+              <div style={{ fontWeight: 800, marginBottom: 10 }}>
+                📐 Dimensions du colis <span style={{ opacity: 0.5, fontWeight: 500 }}>(optionnel)</span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
+                <div>
+                  <label style={labelStyle}>Longueur (cm)</label>
+                  <input
+                    name="longueur"
+                    value={form.longueur}
+                    onChange={handleChange}
+                    type="number"
+                    placeholder="Ex: 40"
+                    step="0.1"
+                    min="0"
+                    style={errStyle(errors.longueur)}
+                  />
+                  <ErrMsg msg={errors.longueur} />
+                </div>
+
+                <div>
+                  <label style={labelStyle}>Largeur (cm)</label>
+                  <input
+                    name="largeur"
+                    value={form.largeur}
+                    onChange={handleChange}
+                    type="number"
+                    placeholder="Ex: 30"
+                    step="0.1"
+                    min="0"
+                    style={errStyle(errors.largeur)}
+                  />
+                  <ErrMsg msg={errors.largeur} />
+                </div>
+
+                <div>
+                  <label style={labelStyle}>Hauteur (cm)</label>
+                  <input
+                    name="hauteur"
+                    value={form.hauteur}
+                    onChange={handleChange}
+                    type="number"
+                    placeholder="Ex: 25"
+                    step="0.1"
+                    min="0"
+                    style={errStyle(errors.hauteur)}
+                  />
+                  <ErrMsg msg={errors.hauteur} />
+                </div>
+              </div>
+
+              <div style={{ fontSize: "0.72rem", opacity: 0.55, marginTop: 8 }}>
+                Ces valeurs seront enregistrées dans la base et pourront être utilisées par l’IA pour organiser les tournées.
               </div>
             </div>
 

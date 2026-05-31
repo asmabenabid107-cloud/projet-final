@@ -288,6 +288,21 @@ function timelineOf(colis) {
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 }
 
+function formatDimensionNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return null;
+  return Number.isInteger(number) ? String(number) : number.toFixed(1);
+}
+
+function formatDimensions(colis) {
+  const longueur = formatDimensionNumber(colis?.longueur);
+  const largeur = formatDimensionNumber(colis?.largeur);
+  const hauteur = formatDimensionNumber(colis?.hauteur);
+
+  if (!longueur || !largeur || !hauteur) return "Non définies";
+  return `${longueur} × ${largeur} × ${hauteur} cm`;
+}
+
 function InfoTile({ icon, label, value, wide = false }) {
   return (
     <div className={`admHistoryInfoTile ${wide ? "isWide" : ""}`}>
@@ -437,6 +452,7 @@ export default function AdminColisHistoryModal({ colis, onClose }) {
                   <InfoTile icon={MapPin} label="Adresse" value={colis.adresse_livraison} wide />
                   <InfoTile icon={WalletCards} label="Montant" value={formatMoney(colis.prix)} />
                   <InfoTile icon={Boxes} label="Articles" value={`${itemCountOf(colis.produits)} article(s)`} />
+                  <InfoTile icon={Boxes} label="Dimensions" value={formatDimensions(colis)} />
                   <InfoTile icon={Barcode} label="Code barre" value={colis.barcode_value || "Non genere"} wide />
                 </div>
               </section>

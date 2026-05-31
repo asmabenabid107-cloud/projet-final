@@ -99,6 +99,19 @@ function formatMoney(value) {
   return Number.isFinite(amount) ? `${amount.toFixed(2)} DT` : "-";
 }
 
+function formatDimension(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? `${number} cm` : "-";
+}
+
+function hasDimensions(colis) {
+  return (
+    Number(colis?.longueur) > 0 &&
+    Number(colis?.largeur) > 0 &&
+    Number(colis?.hauteur) > 0
+  );
+}
+
 function formatPrintAmount(value) {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return "-";
@@ -938,6 +951,25 @@ const pageButtonStyle = {
   fontWeight: 900,
 };
 
+function InfoCell({ label, value, color, monospace = false, muted = false }) {
+  return (
+    <div>
+      <div style={{ fontSize: "0.68rem", opacity: 0.5, marginBottom: 3 }}>{label}</div>
+      <div
+        style={{
+          fontWeight: muted ? 700 : 800,
+          fontFamily: monospace ? "monospace" : undefined,
+          fontSize: muted ? "0.82rem" : "0.9rem",
+          opacity: muted ? 0.8 : 1,
+          color: color || undefined,
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
 function ColisCard({ colis, onPrint, onEdit, onDelete }) {
   const isAdminApproved = isApprovedAdminNote(colis.admin_note);
   const status = STATUS_LABELS[effectiveStatusKey(colis)] || {
@@ -974,22 +1006,37 @@ function ColisCard({ colis, onPrint, onEdit, onDelete }) {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, background: "var(--surface-inset-strong)", borderRadius: 10, padding: 12 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 8,
+            background: "var(--surface-inset-strong)",
+            borderRadius: 10,
+            padding: 12,
+          }}
+        >
+          <InfoCell label="Code barre" value={colis.barcode_value || "-"} monospace />
+          <InfoCell label="Prix" value={formatMoney(colis.prix)} color="var(--success)" />
+          <InfoCell label="Poids" value={`${colis.poids} kg`} />
+          <InfoCell label="Date" value={formatDate(colis.created_at)} muted />
+
+          <InfoCell label="Longueur" value={formatDimension(colis.longueur)} />
+          <InfoCell label="Largeur" value={formatDimension(colis.largeur)} />
+          <InfoCell label="Hauteur" value={formatDimension(colis.hauteur)} />
           <div>
-            <div style={{ fontSize: "0.68rem", opacity: 0.5, marginBottom: 3 }}>Code barre</div>
-            <div style={{ fontWeight: 800, fontFamily: "monospace", fontSize: "0.9rem" }}>{colis.barcode_value || "-"}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: "0.68rem", opacity: 0.5, marginBottom: 3 }}>Prix</div>
-            <div style={{ fontWeight: 800, color: "var(--success)", fontSize: "0.9rem" }}>{formatMoney(colis.prix)}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: "0.68rem", opacity: 0.5, marginBottom: 3 }}>Poids</div>
-            <div style={{ fontWeight: 800, fontSize: "0.9rem" }}>{colis.poids} kg</div>
-          </div>
-          <div>
-            <div style={{ fontSize: "0.68rem", opacity: 0.5, marginBottom: 3 }}>Date</div>
-            <div style={{ fontWeight: 700, fontSize: "0.82rem", opacity: 0.8 }}>{formatDate(colis.created_at)}</div>
+            <div style={{ fontSize: "0.68rem", opacity: 0.5, marginBottom: 3 }}>Dimensions</div>
+            <div
+              style={{
+                fontWeight: 800,
+                color: hasDimensions(colis) ? "var(--accent-soft)" : "var(--text-secondary)",
+                fontSize: "0.82rem",
+              }}
+            >
+              {hasDimensions(colis)
+                ? `${colis.longueur} × ${colis.largeur} × ${colis.hauteur} cm`
+                : "Non définies"}
+            </div>
           </div>
         </div>
 

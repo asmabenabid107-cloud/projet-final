@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from datetime import datetime, date, timedelta, timezone, time
 from sqlalchemy.orm import Session
 from datetime import datetime, date, timedelta, timezone
 from app.db.session import get_db
@@ -37,14 +38,22 @@ def serialize_tournee(t: Tournee):
 
         stops.append({
             "ordre": link.ordre,
+            "ordre_chargement": link.ordre_chargement,
+
             "colis_id": colis.id,
             "numero_suivi": colis.numero_suivi,
             "adresse": colis.adresse_livraison,
             "latitude": colis.latitude,
             "longitude": colis.longitude,
+
             "poids": colis.poids,
+            "longueur": colis.longueur,
+            "largeur": colis.largeur,
+            "hauteur": colis.hauteur,
+
             "nom_destinataire": colis.nom_destinataire,
             "telephone_destinataire": colis.telephone_destinataire,
+
             "statut": colis.statut,
             "tracking_stage": colis.tracking_stage,
             "delivery_issue_count": colis.delivery_issue_count,
@@ -52,6 +61,7 @@ def serialize_tournee(t: Tournee):
             "last_delivery_issue_reason": colis.last_delivery_issue_reason,
             "delivered_at": colis.delivered_at,
             "returned_at": colis.returned_at,
+
             "distance_depuis_precedent": link.distance_depuis_precedent,
         })
 
@@ -84,30 +94,58 @@ def serialize_tournee(t: Tournee):
 
 DAY_NAMES_FR = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
+TZ_TUNISIA = timezone(timedelta(hours=1))
+GENERATION_TODAY_LIMIT = time(7, 30)  # 07:30 صباحًا
+
+def _tunisia_today() -> date:
+    return datetime.now(tz=TZ_TUNISIA).date()
+
+def _tunisia_now_time():
+    return datetime.now(tz=TZ_TUNISIA).time()
+
 def _resolve_execution_date(execution_date_str: str | None) -> date:
-    """
-    Résout la date d'exécution depuis le query param.
-    - None / vide  → demain (Tunisie UTC+1)
-    - "today"      → aujourd'hui (Tunisie)
-    - "YYYY-MM-DD" → date exacte
-    """
-    TZ_TUNISIA = timezone(timedelta(hours=1))
-    today_tunisia = datetime.now(tz=TZ_TUNISIA).date()
+    today = _tunisia_today()
+    tomorrow = today + timedelta(days=1)
 
     if not execution_date_str or execution_date_str.strip() == "":
-        return today_tunisia
+        if _tunisia_now_time() <= GENERATION_TODAY_LIMIT:
+            return today
+        return tomorrow
 
     val = execution_date_str.strip().lower()
-    if val in ("today", "aujourd'hui"):
-        return today_tunisia
+
+    if val in ("today", "aujourd'hui", "aujourdhui"):
+        if _tunisia_now_time() > GENERATION_TODAY_LIMIT:
+            raise HTTPException(
+                status_code=400,
+                detail="La génération des tournées pour aujourd’hui n’est disponible que jusqu’à 07:30 du matin. Veuillez choisir demain."
+            )
+        return today
+
+    if val in ("tomorrow", "demain"):
+        return tomorrow
 
     try:
-        return date.fromisoformat(val)
+        selected_date = date.fromisoformat(val)
     except ValueError:
         raise HTTPException(
             status_code=422,
-            detail=f"Format de date invalide: '{execution_date_str}'. Utilisez YYYY-MM-DD.",
+            detail=f"Format de date invalide: '{execution_date_str}'. Utilisez YYYY-MM-DD, today ou tomorrow.",
         )
+
+    if selected_date < today:
+        raise HTTPException(
+            status_code=400,
+            detail="Impossible de générer une tournée pour une date passée."
+        )
+
+    if selected_date == today and _tunisia_now_time() > GENERATION_TODAY_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail="La génération des tournées pour aujourd’hui n’est disponible que jusqu’à 07:30 du matin. Veuillez choisir demain."
+        )
+
+    return selected_date
 
 
 # ── Generate ──────────────────────────────────────────────────────────────────
@@ -187,6 +225,7 @@ def generate_ai_tournees(
                     tournee_id=tournee.id,
                     colis_id=c["colis_id"],
                     ordre=c["ordre"],
+                    ordre_chargement=c.get("ordre_chargement"),
                     distance_depuis_precedent=c.get("distance_depuis_precedent", 0),
                 ))
 
@@ -232,6 +271,7 @@ def get_tournees(
 
 
 # ── GET restants ──────────────────────────────────────────────────────────────
+# ── GET restants ──────────────────────────────────────────────────────────────
 @router.get("/restants")
 @router.get("/restants/")
 def get_restants_colis(
@@ -264,21 +304,77 @@ def get_restants_colis(
             .all()
         )
 
+        existing_tournees = (
+            db.query(Tournee)
+            .filter(
+                Tournee.execution_date == target_date,
+                Tournee.status != "refused",
+            )
+            .all()
+        )
+
+        def clean_for_compare(value):
+            return (
+                str(value or "")
+                .replace("_", " ")
+                .replace("-", " ")
+                .lower()
+                .strip()
+            )
+
+        def region_exists_in_tournee(region, tournee_region):
+            region_clean = clean_for_compare(region)
+
+            parts = [
+                clean_for_compare(p)
+                for p in str(tournee_region or "").split("+")
+                if p.strip()
+            ]
+
+            return region_clean in parts
+
+        def get_restant_reason(c, region):
+            # 1) GPS manquant
+            if c.latitude is None or c.longitude is None:
+                return (
+                    "Ce colis n’a pas été affecté car ses coordonnées GPS sont manquantes. "
+                    "L’IA ne peut pas l’intégrer dans un parcours optimisé sans latitude et longitude."
+                )
+
+            # 2) La région existe déjà dans une tournée créée
+            for t in existing_tournees:
+                if region_exists_in_tournee(region, t.region):
+                    return (
+                        f"Une tournée existe déjà pour cette zone ({t.region}) avec "
+                        f"{t.nombre_colis} colis et {round(float(t.poids_total or 0), 1)} kg. "
+                        "Ce colis n’a pas été ajouté car il n’a pas été retenu par l’optimisation IA "
+                        "selon les contraintes de distance, de capacité, de volume ou de regroupement."
+                    )
+
+            # 3) Groupe isolé ou trop petit
+            return (
+                "Ce colis appartient à un groupe isolé ou trop petit pour générer une tournée complète. "
+                "Il reste en attente jusqu’à l’arrivée d’autres colis compatibles."
+            )
+
         grouped = {}
 
         for c in restants:
             region = c.gouvernorat or "Sans Région"
+            reason = get_restant_reason(c, region)
 
             if region not in grouped:
                 grouped[region] = {
                     "region": region,
                     "count": 0,
                     "poids_total": 0,
+                    "reason": reason,
                     "colis": [],
                 }
 
             grouped[region]["count"] += 1
             grouped[region]["poids_total"] += float(c.poids or 0)
+
             grouped[region]["colis"].append({
                 "id": c.id,
                 "numero_suivi": c.numero_suivi,
@@ -289,6 +385,12 @@ def get_restants_colis(
                 "delegation": c.delegation,
                 "rue": c.rue,
                 "poids": c.poids,
+                "latitude": c.latitude,
+                "longitude": c.longitude,
+                "longueur": c.longueur,
+                "largeur": c.largeur,
+                "hauteur": c.hauteur,
+                "reason": reason,
             })
 
         result = []

@@ -63,6 +63,21 @@ function depotStyle(value) {
     border: "rgba(255,255,255,.12)",
   };
 }
+function formatDimensionNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return null;
+  return Number.isInteger(number) ? String(number) : number.toFixed(1);
+}
+
+function formatDimensions(colis) {
+  const longueur = formatDimensionNumber(colis?.longueur);
+  const largeur = formatDimensionNumber(colis?.largeur);
+  const hauteur = formatDimensionNumber(colis?.hauteur);
+
+  if (!longueur || !largeur || !hauteur) return "Non définies";
+  return `${longueur} × ${largeur} × ${hauteur} cm`;
+}
+
 export default function ColisConfirmes() {
   const [colisList, setColisList] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -318,6 +333,7 @@ export default function ColisConfirmes() {
                   <div style={{ flex: 1, minWidth: 130, opacity: 0.75, fontSize: "0.83rem" }}>{colis.adresse_livraison}</div>
                   <div style={{ display: "flex", gap: 14, fontSize: "0.83rem" }}>
                     <div><span style={{ opacity: 0.5 }}>Poids </span><strong>{colis.poids} kg</strong></div>
+                    <div><span style={{ opacity: 0.5 }}>Dimensions </span><strong style={{ color: "var(--accent-soft)" }}>{formatDimensions(colis)}</strong></div>
                     <div><span style={{ opacity: 0.5 }}>Prix </span><strong style={{ color: "var(--success)" }}>{colis.prix} DT</strong></div>
                     {produits.length > 0 && <div><span style={{ opacity: 0.5 }}>Produits </span><strong style={{ color: "var(--violet)" }}>{produits.length}</strong></div>}
                   </div>

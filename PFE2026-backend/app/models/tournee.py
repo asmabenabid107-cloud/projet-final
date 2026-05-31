@@ -54,7 +54,12 @@ class TourneeColis(Base):
     tournee_id = Column(Integer, ForeignKey("tournees.id", ondelete="CASCADE"))
     colis_id = Column(Integer, ForeignKey("colis.id"))
 
+    # ordre de livraison
     ordre = Column(Integer, default=0)
+
+    # ordre de chargement dans le camion selon LIFO
+    ordre_chargement = Column(Integer, nullable=True)
+
     distance_depuis_precedent = Column(Float, default=0)
 
     tournee = relationship("Tournee", back_populates="colis_items")

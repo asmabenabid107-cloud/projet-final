@@ -50,6 +50,26 @@ const extractDepots = (tournees) => {
   return depots.sort();
 };
 
+function getStops(tournee) {
+  return Array.isArray(tournee?.stops) ? tournee.stops : [];
+}
+
+function formatDimensions(stop) {
+  const l = stop?.longueur;
+  const w = stop?.largeur;
+  const h = stop?.hauteur;
+  if (!l || !w || !h) return "Dimensions non définies";
+  return `${l} × ${w} × ${h} cm`;
+}
+
+function sortByLivraison(stops) {
+  return [...stops].sort((a, b) => (Number(a.ordre) || 0) - (Number(b.ordre) || 0));
+}
+
+function sortByChargement(stops) {
+  return [...stops].sort((a, b) => (Number(a.ordre_chargement) || 999999) - (Number(b.ordre_chargement) || 999999));
+}
+
 /* ─── CSS ─────────────────────────────────────────────────── */
 const css = `
 .ta-page {
@@ -580,8 +600,13 @@ export default function TourneesAccepted() {
   const [query, setQuery]                   = useState("");
   const [depotFilter, setDepotFilter]       = useState("all");  // ← NEW
 
-  const parcoursSteps = useMemo(
-    () => parseParcours(selectedTournee?.parcours_text || ""),
+  const deliveryStops = useMemo(
+    () => sortByLivraison(getStops(selectedTournee)),
+    [selectedTournee]
+  );
+
+  const loadingStops = useMemo(
+    () => sortByChargement(getStops(selectedTournee)),
     [selectedTournee]
   );
 
@@ -794,27 +819,65 @@ export default function TourneesAccepted() {
 
               <div className="ta-route-section">
                 <div className="ta-route-head">
-                  <strong>Parcours</strong>
-                  <span className="ta-route-count">{parcoursSteps.length} étapes</span>
+                  <strong>Parcours de livraison</strong>
+                  <span className="ta-route-count">{deliveryStops.length} colis</span>
                 </div>
 
-                {parcoursSteps.length > 0 ? (
+                {deliveryStops.length > 0 ? (
                   <div className="ta-route-list">
-                    {parcoursSteps.map((step) => (
-                      <div key={step.id} className="ta-step">
-                        <div className="ta-step-no">{step.id}</div>
+                    {deliveryStops.map((stop) => (
+                      <div key={`delivery-${stop.colis_id}`} className="ta-step">
+                        <div className="ta-step-no">{stop.ordre}</div>
                         <div className="ta-step-card">
-                          <div className="ta-step-address">{step.adresse}</div>
-                          {step.details && (
-                            <div className="ta-step-details">{step.details}</div>
-                          )}
+                          <div className="ta-step-address">{stop.adresse || "Adresse non définie"}</div>
+                          <div className="ta-step-details">
+                            Livraison #{stop.ordre} · Chargement camion #{stop.ordre_chargement || "-"}
+                          </div>
+                          <div className="ta-step-details">
+                            Dimensions : {formatDimensions(stop)}
+                          </div>
+                          <div className="ta-step-details">
+                            Poids : {formatNumber(stop.poids)} kg
+                          </div>
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
                   <div style={{ color: "var(--text-secondary)", fontWeight: 800 }}>
-                    Aucun parcours disponible.
+                    Aucun détail colis disponible.
+                  </div>
+                )}
+              </div>
+
+              <div className="ta-route-section" style={{ marginTop: 14 }}>
+                <div className="ta-route-head">
+                  <strong>Organisation du camion</strong>
+                  <span className="ta-route-count">Méthode LIFO</span>
+                </div>
+
+                {loadingStops.length > 0 ? (
+                  <div className="ta-route-list">
+                    {loadingStops.map((stop) => (
+                      <div key={`loading-${stop.colis_id}`} className="ta-step">
+                        <div className="ta-step-no">{stop.ordre_chargement || "-"}</div>
+                        <div className="ta-step-card">
+                          <div className="ta-step-address">
+                            Charger colis {stop.numero_suivi ? `#${stop.numero_suivi}` : `#${stop.colis_id}`}
+                          </div>
+                          <div className="ta-step-details">
+                            Livraison prévue #{stop.ordre}
+                          </div>
+                          <div className="ta-step-details">
+                            Dimensions : {formatDimensions(stop)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ color: "var(--text-secondary)", fontWeight: 800 }}>
+                    Aucun ordre de chargement disponible.
                   </div>
                 )}
               </div>

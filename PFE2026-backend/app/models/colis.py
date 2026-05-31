@@ -25,6 +25,9 @@ class Colis(Base):
     ouvrir_colis = Column(String(10), nullable=False, default="non")
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
+    longueur = Column(Float, nullable=True)
+    largeur = Column(Float, nullable=True)
+    hauteur = Column(Float, nullable=True)
 
     zone = Column(String(100), nullable=True)
     gouvernorat = Column(String(100), nullable=True)
