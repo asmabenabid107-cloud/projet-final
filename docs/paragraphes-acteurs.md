@@ -1,0 +1,13 @@
+## Administrateur
+
+L'administrateur assure la supervision generale de la plateforme. Il gere les comptes des utilisateurs, notamment les expediteurs et les livreurs, ainsi que les vehicules de livraison en ajoutant, modifiant, supprimant et mettant a jour leur statut. Il controle egalement les colis crees par les expediteurs, verifie leurs informations, puis les confirme ou les refuse. Il peut aussi consulter les colis confirmes, refuses et leur historique detaille afin de suivre les validations, les changements d'etat, les relivraisons et les retours.
+
+Il intervient aussi dans la planification des livraisons en consultant la disponibilite des livreurs, leur affectation sur la carte, les tournees acceptees ainsi que le suivi GPS en temps reel. De plus, il lance la generation intelligente des tournees par l'IA, consulte les propositions generees, puis accepte ou refuse une tournee selon le livreur, le vehicule, le depot ou le parcours propose. Il traite egalement les demandes de conge envoyees par les livreurs et peut suivre les colis restants non affectes avant validation. Enfin, il dispose d'un tableau de bord contenant des statistiques globales sur les colis, les livreurs, les vehicules, les comptes en attente et les tournees.
+
+## Livreur
+
+Le livreur est charge d'effectuer les livraisons des colis qui lui sont affectes. Apres la creation de son compte et sa validation par l'administrateur, il accede a son application mobile afin de consulter son tableau de bord, sa tournee, la liste des colis a livrer et l'ordre de livraison propose. Il peut aussi consulter les colis qui lui sont deja affectes, les colis a relivrer et les colis en retour expediteur pour poursuivre correctement sa mission.
+
+Le livreur peut visualiser l'itineraire de livraison sur une carte interactive. Il utilise principalement le scan QR pour consulter la fiche d'un colis et mettre a jour son etat, par exemple : recupere, arrive au depot, sorti en livraison, livre, a relivrer demain ou retourne a l'expediteur. En cas d'echec de livraison, il saisit un motif, et le systeme enregistre le nombre de tentatives effectuees. Depuis la fiche du colis, il peut egalement appeler le destinataire, et cet appel est enregistre dans l'historique du colis.
+
+L'application mobile detecte automatiquement la position GPS du livreur et l'envoie au systeme afin de permettre le suivi en temps reel par l'administrateur. Le livreur peut egalement consulter et modifier son profil, ainsi que voir ses informations d'affectation comme la region, le depot, le statut ou le jour de repos. Enfin, il peut envoyer une demande de conge avec une periode et une raison, puis suivre l'etat de cette demande dans l'application.
