@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime
 from urllib.parse import parse_qs, unquote, urlparse
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import require_courier
 from app.core.colis_events import (
@@ -25,10 +25,12 @@ from app.models.user import User
 from app.schemas.colis import (
     ColisCourierAssignedItemResponse,
     ColisCourierActionResponse,
+    ColisCourierHistoryItemResponse,
     ColisCourierScanActionRequest,
     ColisCourierScanRequest,
     ColisCourierUndeliveredItemResponse,
     ColisCourierUndeliveredRequest,
+    ColisHistoryEventResponse,
 )
 
 router = APIRouter(prefix="/courier/colis", tags=["courier-colis"])
@@ -52,6 +54,11 @@ DETAIL_LINK_SEGMENTS = {
 NOT_ASSIGNED_DETAIL = (
     "Ce colis n'est pas ton colis. Il n'a pas ete affecte a ton compte."
 )
+HISTORY_STATUS_LABELS = {
+    "delivered": "Livre",
+    "returned": "Retour expediteur",
+    "rescheduled": "A relivrer",
+}
 
 
 def _extract_barcode_value(raw_value: str) -> str:
@@ -209,6 +216,131 @@ def _serialize_assigned_item(link: TourneeColis) -> ColisCourierAssignedItemResp
         ordre=link.ordre or 0,
         remaining_issue_days=max(MAX_UNDELIVERED_DAYS - count, 0),
     )
+
+
+def _normalized_text(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def _history_status_for_colis(colis: Colis) -> str | None:
+    statut = _normalized_text(colis.statut)
+    stage = _normalized_text(colis.tracking_stage)
+    issue_count = colis.delivery_issue_count or 0
+
+    if (
+        colis.returned_at is not None
+        or stage in {"return_pending", "returned"}
+        or "retour" in statut
+    ):
+        return "returned"
+
+    if (
+        colis.delivered_at is not None
+        or stage == "delivered"
+        or "livr" in statut
+    ):
+        return "delivered"
+
+    if (
+        colis.last_delivery_issue_at is not None
+        or "relivr" in statut
+        or "report" in statut
+        or stage == "delivery_failed"
+        or stage == "not_delivered"
+        or (stage == "at_warehouse" and issue_count > 0)
+    ):
+        return "rescheduled"
+
+    return None
+
+
+def _history_date_for_colis(colis: Colis, history_status: str | None) -> datetime | None:
+    if history_status == "returned":
+        return (
+            colis.returned_at
+            or colis.last_delivery_issue_at
+            or colis.out_for_delivery_at
+            or colis.warehouse_received_at
+            or colis.picked_up_at
+        )
+
+    if history_status == "delivered":
+        return (
+            colis.delivered_at
+            or colis.out_for_delivery_at
+            or colis.warehouse_received_at
+            or colis.picked_up_at
+        )
+
+    if history_status == "rescheduled":
+        return (
+            colis.last_delivery_issue_at
+            or colis.out_for_delivery_at
+            or colis.warehouse_received_at
+            or colis.picked_up_at
+        )
+
+    return None
+
+
+def _serialize_history_item(
+    link: TourneeColis,
+) -> ColisCourierHistoryItemResponse | None:
+    assigned_item = _serialize_assigned_item(link)
+    colis = link.colis
+    if assigned_item is None or colis is None:
+        return None
+
+    history_status = _history_status_for_colis(colis)
+    if history_status is None:
+        return None
+
+    history_date = _history_date_for_colis(colis, history_status)
+
+    return ColisCourierHistoryItemResponse(
+        **assigned_item.model_dump(),
+        history_status=history_status,
+        history_label=HISTORY_STATUS_LABELS.get(history_status, "Historique"),
+        history_date=history_date,
+    )
+
+
+def _parse_history_date_query(value: str | None, field_name: str) -> date | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{field_name} invalide: '{raw}'. "
+                "Utilise le format YYYY-MM-DD."
+            ),
+        )
+
+
+def _history_matches_query(
+    item: ColisCourierHistoryItemResponse,
+    query: str,
+) -> bool:
+    haystack = " ".join(
+        filter(
+            None,
+            [
+                item.numero_suivi,
+                item.barcode_value or "",
+                item.nom_destinataire or "",
+                item.adresse_livraison or "",
+                item.tournee_nom or "",
+                item.tournee_region or "",
+                item.history_label,
+            ],
+        )
+    ).lower()
+    return query in haystack
 
 
 def _is_returned(colis: Colis) -> bool:
@@ -566,6 +698,108 @@ def list_assigned_colis(
         seen_colis_ids.add(link.colis_id)
         result.append(item)
     return result
+
+
+@router.get("/history", response_model=list[ColisCourierHistoryItemResponse])
+def list_history_colis(
+    q: str = Query(default=""),
+    status: str = Query(default="all"),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    db: Session = Depends(get_db),
+    courier: User = Depends(require_courier),
+):
+    start_date = _parse_history_date_query(date_from, "date_from")
+    end_date = _parse_history_date_query(date_to, "date_to")
+    if start_date and end_date and end_date < start_date:
+        raise HTTPException(
+            status_code=422,
+            detail="date_to doit etre superieure ou egale a date_from.",
+        )
+
+    status_filter = _normalized_text(status)
+    if status_filter in {"", "all", "tous", "toutes"}:
+        status_filter = "all"
+    allowed_statuses = {"all", "delivered", "returned", "rescheduled"}
+    if status_filter not in allowed_statuses:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Filtre status invalide. "
+                "Valeurs acceptees: all, delivered, returned, rescheduled."
+            ),
+        )
+
+    query = _normalized_text(q)
+    rows = (
+        db.query(TourneeColis)
+        .join(Tournee, Tournee.id == TourneeColis.tournee_id)
+        .join(Colis, Colis.id == TourneeColis.colis_id)
+        .filter(
+            Tournee.status == "accepted",
+            Tournee.livreur_id == courier.id,
+        )
+        .order_by(
+            Tournee.created_at.desc(),
+            Tournee.id.desc(),
+            TourneeColis.ordre.asc(),
+            TourneeColis.id.asc(),
+        )
+        .all()
+    )
+
+    seen_colis_ids = set()
+    result: list[ColisCourierHistoryItemResponse] = []
+    for link in rows:
+        if link.colis_id in seen_colis_ids:
+            continue
+
+        item = _serialize_history_item(link)
+        seen_colis_ids.add(link.colis_id)
+        if item is None:
+            continue
+
+        if status_filter != "all" and item.history_status != status_filter:
+            continue
+
+        if query and not _history_matches_query(item, query):
+            continue
+
+        history_dt = item.history_date
+        history_day = history_dt.date() if history_dt is not None else None
+        if start_date and (history_day is None or history_day < start_date):
+            continue
+        if end_date and (history_day is None or history_day > end_date):
+            continue
+
+        result.append(item)
+
+    result.sort(
+        key=lambda item: item.history_date or datetime.min,
+        reverse=True,
+    )
+    return result[:limit]
+
+
+@router.get("/{colis_id}/history", response_model=list[ColisHistoryEventResponse])
+def get_colis_history(
+    colis_id: int,
+    db: Session = Depends(get_db),
+    courier: User = Depends(require_courier),
+):
+    colis = (
+        db.query(Colis)
+        .options(selectinload(Colis.history))
+        .filter(Colis.id == colis_id)
+        .first()
+    )
+    if not colis:
+        raise HTTPException(status_code=404, detail="Colis introuvable")
+
+    _ensure_colis_assigned_to_courier(db, colis, courier)
+    history = sorted(colis.history or [], key=lambda event: event.event_at or datetime.min)
+    return history
 
 
 @router.get("/not-delivered", response_model=list[ColisCourierUndeliveredItemResponse])

@@ -185,3 +185,12 @@ class ColisCourierAssignedItemResponse(ColisCourierActionResponse):
 
     class Config:
         from_attributes = True
+
+
+class ColisCourierHistoryItemResponse(ColisCourierAssignedItemResponse):
+    history_status: str
+    history_label: str
+    history_date: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

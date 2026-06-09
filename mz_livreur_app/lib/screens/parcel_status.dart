@@ -27,12 +27,15 @@ class _ParcelStatusScreenState extends State<ParcelStatusScreen> {
   final TextEditingController _reasonController = TextEditingController();
 
   bool _loading = true;
+  bool _historyLoading = false;
   bool _submitting = false;
   bool _calling = false;
   bool _messagePositive = false;
   String _message = '';
+  String _historyMessage = '';
   String _code = '';
   Map<String, dynamic>? _colis;
+  List<Map<String, dynamic>> _historyEvents = [];
   ParcelStatusAction? _selectedAction;
   ParcelStatusAction? _currentAction;
 
@@ -169,11 +172,181 @@ class _ParcelStatusScreenState extends State<ParcelStatusScreen> {
     return statut.contains('retour') || stage == 'return_pending';
   }
 
+  bool get _isHistoryOnlyView {
+    final initialStatus =
+        (widget.initialData?['history_status']?.toString() ?? '').trim();
+    if (initialStatus.isNotEmpty) return true;
+
+    final data = _colis;
+    if (data == null) return false;
+
+    final statut = (data['statut']?.toString() ?? '').toLowerCase();
+    final stage = (data['tracking_stage']?.toString() ?? '').toLowerCase();
+    final deliveredAt = data['delivered_at']?.toString() ?? '';
+    final returnedAt = data['returned_at']?.toString() ?? '';
+    final issueAt = data['last_delivery_issue_at']?.toString() ?? '';
+    final issueCount =
+        int.tryParse(data['delivery_issue_count']?.toString() ?? '0') ?? 0;
+
+    return deliveredAt.isNotEmpty ||
+        returnedAt.isNotEmpty ||
+        issueAt.isNotEmpty ||
+        stage == 'delivered' ||
+        stage == 'returned' ||
+        stage == 'return_pending' ||
+        statut.contains('livr') ||
+        statut.contains('retour') ||
+        statut.contains('relivr') ||
+        statut.contains('report') ||
+        (stage == 'at_warehouse' && issueCount > 0);
+  }
+
   bool _canChooseAction(ParcelStatusAction action) {
     if (_loading || _submitting || _code.isEmpty || _colis == null)
       return false;
     if (_isTerminalState || _isReturnLocked) return false;
     return action != _currentAction;
+  }
+
+  List<Map<String, dynamic>> _readEventList(Map<String, dynamic> response) {
+    for (final key in ['data', 'history', 'items']) {
+      final raw = response[key];
+      if (raw is List) {
+        return raw
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .toList();
+      }
+    }
+    return [];
+  }
+
+  List<Map<String, dynamic>> _buildFallbackHistoryEvents() {
+    final colis = _colis;
+    if (colis == null) return [];
+
+    final events = <Map<String, dynamic>>[];
+
+    void addEvent({
+      required String kind,
+      required String title,
+      required String note,
+      String? date,
+    }) {
+      final value = (date ?? '').trim();
+      if (value.isEmpty) return;
+      events.add({
+        'kind': kind,
+        'title': title,
+        'note': note,
+        'date': value,
+        'is_notification': false,
+      });
+    }
+
+    addEvent(
+      kind: 'picked_up',
+      title: 'Colis pris en charge',
+      note: 'Le colis a ete recupere chez l expediteur.',
+      date: colis['picked_up_at']?.toString(),
+    );
+    addEvent(
+      kind: 'warehouse_in',
+      title: 'Colis depose au depot',
+      note: 'Le colis est arrive au depot.',
+      date: colis['warehouse_received_at']?.toString(),
+    );
+    addEvent(
+      kind: 'warehouse_out',
+      title: 'Colis sorti du depot',
+      note: 'Le colis a quitte le depot pour la livraison.',
+      date: colis['out_for_delivery_at']?.toString(),
+    );
+    addEvent(
+      kind: 'delivery_issue',
+      title: 'Livraison reportee',
+      note:
+          colis['last_delivery_issue_reason']?.toString().trim().isNotEmpty ==
+              true
+          ? 'Motif: ${colis['last_delivery_issue_reason']}'
+          : 'La livraison a ete reportee.',
+      date: colis['last_delivery_issue_at']?.toString(),
+    );
+    addEvent(
+      kind: 'return_pending',
+      title: 'Retour expediteur a confirmer',
+      note: 'Le colis attend son retour expediteur.',
+      date:
+          (colis['tracking_stage']?.toString() ?? '').toLowerCase() ==
+              'return_pending'
+          ? colis['last_delivery_issue_at']?.toString() ??
+                colis['out_for_delivery_at']?.toString()
+          : null,
+    );
+    addEvent(
+      kind: 'delivered',
+      title: 'Colis arrive a destination',
+      note: 'La livraison a ete confirmee.',
+      date: colis['delivered_at']?.toString(),
+    );
+    addEvent(
+      kind: 'returned',
+      title: 'Colis retourne a l expediteur',
+      note: 'Le colis a ete remis a l expediteur.',
+      date: colis['returned_at']?.toString(),
+    );
+
+    events.sort((a, b) {
+      final left = DateTime.tryParse(a['date']?.toString() ?? '');
+      final right = DateTime.tryParse(b['date']?.toString() ?? '');
+      if (left == null && right == null) return 0;
+      if (left == null) return -1;
+      if (right == null) return 1;
+      return left.compareTo(right);
+    });
+
+    return events;
+  }
+
+  Future<void> _loadHistoryForCurrentColis() async {
+    final colisId = _currentColisId();
+    if (colisId == null) {
+      if (!mounted) return;
+      setState(() {
+        _historyLoading = false;
+        _historyEvents = [];
+        _historyMessage = '';
+      });
+      return;
+    }
+
+    setState(() {
+      _historyLoading = true;
+      _historyMessage = '';
+    });
+
+    try {
+      final data = await Api.getJson(
+        '/courier/colis/$colisId/history',
+        withAuth: true,
+      );
+      final items = _readEventList(data);
+      if (!mounted) return;
+      setState(() {
+        _historyEvents = items.isNotEmpty
+            ? items
+            : _buildFallbackHistoryEvents();
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (await _redirectIfAuthError(e)) return;
+      setState(() {
+        _historyEvents = _buildFallbackHistoryEvents();
+        _historyMessage = e.statusCode == 404 ? '' : e.message;
+      });
+    } finally {
+      if (mounted) setState(() => _historyLoading = false);
+    }
   }
 
   Future<void> _loadCurrentState() async {
@@ -182,6 +355,8 @@ class _ParcelStatusScreenState extends State<ParcelStatusScreen> {
         _loading = false;
         _messagePositive = false;
         _message = 'Aucun code colis à ouvrir.';
+        _historyEvents = [];
+        _historyMessage = '';
       });
       return;
     }
@@ -204,12 +379,15 @@ class _ParcelStatusScreenState extends State<ParcelStatusScreen> {
         _messagePositive = false;
         _message = '';
       });
+      Future.microtask(_loadHistoryForCurrentColis);
     } on ApiException catch (e) {
       if (!mounted) return;
       if (await _redirectIfAuthError(e)) return;
       setState(() {
         _message = e.message;
         _messagePositive = false;
+        _historyEvents = [];
+        _historyMessage = '';
       });
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -280,6 +458,7 @@ class _ParcelStatusScreenState extends State<ParcelStatusScreen> {
         _message = data['detail']?.toString() ?? 'Statut mis à jour.';
         _messagePositive = true;
       });
+      Future.microtask(_loadHistoryForCurrentColis);
     } on ApiException catch (e) {
       if (!mounted) return;
       if (await _redirectIfAuthError(e)) return;
@@ -370,6 +549,7 @@ class _ParcelStatusScreenState extends State<ParcelStatusScreen> {
             'Appel destinataire enregistre dans l historique.';
         _messagePositive = true;
       });
+      Future.microtask(_loadHistoryForCurrentColis);
     } on ApiException catch (e) {
       if (!mounted) return;
       if (await _redirectIfAuthError(e)) return;
@@ -437,6 +617,141 @@ class _ParcelStatusScreenState extends State<ParcelStatusScreen> {
     return '${dd(local.day)}/${dd(local.month)}/${local.year} ${dd(local.hour)}:${dd(local.minute)}';
   }
 
+  String _historyEventKind(Map<String, dynamic> event) {
+    return (event['kind']?.toString() ?? '').trim().toLowerCase();
+  }
+
+  String _historyEventTitle(Map<String, dynamic> event) {
+    final title = event['title']?.toString().trim() ?? '';
+    if (title.isNotEmpty) return title;
+
+    switch (_historyEventKind(event)) {
+      case 'picked_up':
+        return 'Colis pris en charge';
+      case 'approved':
+        return 'Colis valide';
+      case 'rejected':
+        return 'Colis refuse';
+      case 'warehouse_in':
+        return 'Colis depose au depot';
+      case 'warehouse_out':
+        return 'Colis sorti du depot';
+      case 'courier_call':
+        return 'Appel destinataire';
+      case 'delivery_issue':
+      case 'rescheduled':
+        return 'Livraison reportee';
+      case 'return_pending':
+        return 'Retour expediteur a confirmer';
+      case 'returned':
+        return 'Colis retourne a l expediteur';
+      case 'delivered':
+        return 'Colis livre';
+      case 'pending':
+        return 'Colis en attente';
+      case 'cancelled':
+        return 'Colis annule';
+      default:
+        return 'Evenement colis';
+    }
+  }
+
+  String _historyEventNote(Map<String, dynamic> event) {
+    final note = event['note']?.toString().trim() ?? '';
+    if (note.isNotEmpty) return note;
+
+    switch (_historyEventKind(event)) {
+      case 'picked_up':
+        return 'Le colis a ete recupere chez l expediteur.';
+      case 'warehouse_in':
+        return 'Le colis est arrive au depot.';
+      case 'warehouse_out':
+        return 'Le colis est reparti pour la livraison.';
+      case 'delivered':
+        return 'La livraison a ete confirmee.';
+      case 'courier_call':
+        return 'Le livreur a tente de joindre le destinataire.';
+      case 'delivery_issue':
+      case 'rescheduled':
+        return 'La livraison sera relancee plus tard.';
+      case 'return_pending':
+        return 'Le colis attend son retour expediteur.';
+      case 'returned':
+        return 'Le colis a ete remis a l expediteur.';
+      default:
+        return '';
+    }
+  }
+
+  String _historyEventDate(Map<String, dynamic> event) {
+    return event['date']?.toString() ??
+        event['event_date']?.toString() ??
+        event['created_at']?.toString() ??
+        '';
+  }
+
+  Color _historyEventColor(Map<String, dynamic> event) {
+    switch (_historyEventKind(event)) {
+      case 'picked_up':
+        return _kAmber;
+      case 'approved':
+      case 'delivered':
+      case 'courier_call':
+        return const Color(0xFF22C55E);
+      case 'returned':
+      case 'return_pending':
+      case 'rejected':
+      case 'cancelled':
+        return const Color(0xFFEF4444);
+      case 'delivery_issue':
+      case 'rescheduled':
+        return const Color(0xFF6366F1);
+      case 'warehouse_in':
+      case 'warehouse_out':
+        return _kAmber;
+      default:
+        return _kGrey;
+    }
+  }
+
+  IconData _historyEventIcon(Map<String, dynamic> event) {
+    switch (_historyEventKind(event)) {
+      case 'picked_up':
+        return Icons.qr_code_scanner_rounded;
+      case 'approved':
+        return Icons.verified_rounded;
+      case 'rejected':
+      case 'cancelled':
+        return Icons.block_rounded;
+      case 'warehouse_in':
+        return Icons.inventory_2_outlined;
+      case 'warehouse_out':
+        return Icons.local_shipping_outlined;
+      case 'delivered':
+        return Icons.task_alt_rounded;
+      case 'courier_call':
+        return Icons.call_rounded;
+      case 'delivery_issue':
+      case 'rescheduled':
+        return Icons.event_repeat_rounded;
+      case 'return_pending':
+      case 'returned':
+        return Icons.assignment_return_rounded;
+      case 'pending':
+        return Icons.hourglass_bottom_rounded;
+      default:
+        return Icons.history_rounded;
+    }
+  }
+
+  String _historyEmptyMessage() {
+    if (_historyMessage.trim().isNotEmpty) return _historyMessage.trim();
+    if (_currentColisId() == null) {
+      return 'L historique sera disponible apres le chargement complet de la fiche.';
+    }
+    return 'Aucun evenement n a encore ete enregistre pour ce colis.';
+  }
+
   List<_DetailLine> _detailLines(Map<String, dynamic> colis) => [
     _DetailLine('Destinataire', colis['nom_destinataire']?.toString() ?? '-'),
     _DetailLine(
@@ -497,6 +812,7 @@ class _ParcelStatusScreenState extends State<ParcelStatusScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final colis = _colis;
+    final historyOnlyView = _isHistoryOnlyView;
     final currentLabel = colis == null ? '' : _currentStateFromData(colis);
     final recipientPhone = _recipientPhoneFromData(colis);
     final canCallRecipient =
@@ -685,7 +1001,7 @@ class _ParcelStatusScreenState extends State<ParcelStatusScreen> {
                         ],
 
                         // ── Détails card ──────────────────────
-                        if (colis != null) ...[
+                        if (!historyOnlyView && colis != null) ...[
                           _SectionCard(
                             isDark: isDark,
                             title: 'Détails du colis',
@@ -713,249 +1029,300 @@ class _ParcelStatusScreenState extends State<ParcelStatusScreen> {
                           const SizedBox(height: 16),
                         ],
 
-                        // ── Changer statut card ───────────────
                         _SectionCard(
                           isDark: isDark,
-                          title: 'Changer le statut',
+                          title: 'Historique du colis',
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                _isTerminalState
-                                    ? 'Ce colis est terminé, aucune nouvelle action n\'est disponible.'
-                                    : _isReturnLocked
-                                    ? 'Ce colis est déjà dans le flux retour expéditeur.'
-                                    : 'Choisis une action différente de l\'état actuel.',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: isDark ? Colors.white54 : _kGrey,
+                              if (_historyLoading) ...[
+                                const _HistoryInlineLoader(),
+                                const SizedBox(height: 12),
+                              ],
+                              if (_historyMessage.isNotEmpty &&
+                                  _historyEvents.isNotEmpty) ...[
+                                _MsgBanner(
+                                  message: _historyMessage,
+                                  isSuccess: false,
                                 ),
-                              ),
-                              const SizedBox(height: 16),
-
-                              // Action buttons grid
-                              GridView.count(
-                                crossAxisCount: 2,
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                crossAxisSpacing: 10,
-                                mainAxisSpacing: 10,
-                                childAspectRatio: 1.55,
-                                children: ParcelStatusAction.values.map((
-                                  action,
+                                const SizedBox(height: 12),
+                              ],
+                              if (_historyEvents.isEmpty)
+                                _HistoryEmptyState(
+                                  isDark: isDark,
+                                  message: _historyEmptyMessage(),
+                                )
+                              else
+                                ...List.generate(_historyEvents.length, (
+                                  index,
                                 ) {
-                                  final isSelected = _selectedAction == action;
-                                  final isCurrent = _currentAction == action;
-                                  final canChoose = _canChooseAction(action);
-                                  final color = _actionColor(action);
-                                  return GestureDetector(
-                                    onTap: canChoose || isCurrent
-                                        ? () => _selectAction(action)
-                                        : null,
-                                    child: AnimatedContainer(
-                                      duration: const Duration(
-                                        milliseconds: 180,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: isSelected
-                                            ? color.withOpacity(0.1)
-                                            : isDark
-                                            ? Colors.white.withOpacity(0.03)
-                                            : const Color(0xFFF6F8FD),
-                                        borderRadius: BorderRadius.circular(14),
-                                        border: Border.all(
-                                          color: isSelected
-                                              ? color.withOpacity(0.5)
-                                              : isCurrent
-                                              ? _kAmber.withOpacity(0.4)
-                                              : isDark
-                                              ? Colors.white.withOpacity(0.08)
-                                              : const Color(0xFFE4E9F4),
-                                          width: isSelected ? 1.8 : 0.8,
+                                  final event = _historyEvents[index];
+                                  return _HistoryEventTile(
+                                    isDark: isDark,
+                                    title: _historyEventTitle(event),
+                                    note: _historyEventNote(event),
+                                    date: _formatDateTime(
+                                      _historyEventDate(event),
+                                    ),
+                                    icon: _historyEventIcon(event),
+                                    color: _historyEventColor(event),
+                                    isNotification:
+                                        event['is_notification'] == true,
+                                    isLast: index == _historyEvents.length - 1,
+                                  );
+                                }),
+                            ],
+                          ),
+                        ),
+                        if (!historyOnlyView) const SizedBox(height: 16),
+
+                        // ── Changer statut card ───────────────
+                        if (!historyOnlyView)
+                          _SectionCard(
+                            isDark: isDark,
+                            title: 'Changer le statut',
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _isTerminalState
+                                      ? 'Ce colis est terminé, aucune nouvelle action n\'est disponible.'
+                                      : _isReturnLocked
+                                      ? 'Ce colis est déjà dans le flux retour expéditeur.'
+                                      : 'Choisis une action différente de l\'état actuel.',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: isDark ? Colors.white54 : _kGrey,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+
+                                // Action buttons grid
+                                GridView.count(
+                                  crossAxisCount: 2,
+                                  shrinkWrap: true,
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  crossAxisSpacing: 10,
+                                  mainAxisSpacing: 10,
+                                  childAspectRatio: 1.55,
+                                  children: ParcelStatusAction.values.map((
+                                    action,
+                                  ) {
+                                    final isSelected =
+                                        _selectedAction == action;
+                                    final isCurrent = _currentAction == action;
+                                    final canChoose = _canChooseAction(action);
+                                    final color = _actionColor(action);
+                                    return GestureDetector(
+                                      onTap: canChoose || isCurrent
+                                          ? () => _selectAction(action)
+                                          : null,
+                                      child: AnimatedContainer(
+                                        duration: const Duration(
+                                          milliseconds: 180,
                                         ),
-                                      ),
-                                      child: Column(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          Container(
-                                            width: 34,
-                                            height: 34,
-                                            decoration: BoxDecoration(
-                                              color: color.withOpacity(
-                                                canChoose || isCurrent
-                                                    ? 0.12
-                                                    : 0.05,
-                                              ),
-                                              borderRadius:
-                                                  BorderRadius.circular(10),
-                                            ),
-                                            child: Icon(
-                                              _actionIcon(action),
-                                              size: 17,
-                                              color: color.withOpacity(
-                                                canChoose || isCurrent
-                                                    ? 1.0
-                                                    : 0.35,
-                                              ),
-                                            ),
+                                        decoration: BoxDecoration(
+                                          color: isSelected
+                                              ? color.withOpacity(0.1)
+                                              : isDark
+                                              ? Colors.white.withOpacity(0.03)
+                                              : const Color(0xFFF6F8FD),
+                                          borderRadius: BorderRadius.circular(
+                                            14,
                                           ),
-                                          const SizedBox(height: 6),
-                                          Text(
-                                            _actionLabel(action),
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w800,
-                                              color: (canChoose || isCurrent)
-                                                  ? (isDark
-                                                        ? Colors.white
-                                                        : _kNavy)
-                                                  : _kGrey.withOpacity(0.5),
-                                            ),
-                                            textAlign: TextAlign.center,
+                                          border: Border.all(
+                                            color: isSelected
+                                                ? color.withOpacity(0.5)
+                                                : isCurrent
+                                                ? _kAmber.withOpacity(0.4)
+                                                : isDark
+                                                ? Colors.white.withOpacity(0.08)
+                                                : const Color(0xFFE4E9F4),
+                                            width: isSelected ? 1.8 : 0.8,
                                           ),
-                                          if (isCurrent) ...[
-                                            const SizedBox(height: 4),
+                                        ),
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
                                             Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 7,
-                                                    vertical: 2,
-                                                  ),
+                                              width: 34,
+                                              height: 34,
                                               decoration: BoxDecoration(
-                                                color: _kAmber.withOpacity(
-                                                  0.12,
+                                                color: color.withOpacity(
+                                                  canChoose || isCurrent
+                                                      ? 0.12
+                                                      : 0.05,
                                                 ),
                                                 borderRadius:
-                                                    BorderRadius.circular(8),
+                                                    BorderRadius.circular(10),
                                               ),
-                                              child: const Text(
-                                                'État actuel',
-                                                style: TextStyle(
-                                                  color: _kAmber,
-                                                  fontSize: 9,
-                                                  fontWeight: FontWeight.w800,
+                                              child: Icon(
+                                                _actionIcon(action),
+                                                size: 17,
+                                                color: color.withOpacity(
+                                                  canChoose || isCurrent
+                                                      ? 1.0
+                                                      : 0.35,
                                                 ),
                                               ),
                                             ),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              _actionLabel(action),
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w800,
+                                                color: (canChoose || isCurrent)
+                                                    ? (isDark
+                                                          ? Colors.white
+                                                          : _kNavy)
+                                                    : _kGrey.withOpacity(0.5),
+                                              ),
+                                              textAlign: TextAlign.center,
+                                            ),
+                                            if (isCurrent) ...[
+                                              const SizedBox(height: 4),
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 7,
+                                                      vertical: 2,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: _kAmber.withOpacity(
+                                                    0.12,
+                                                  ),
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                ),
+                                                child: const Text(
+                                                  'État actuel',
+                                                  style: TextStyle(
+                                                    color: _kAmber,
+                                                    fontSize: 9,
+                                                    fontWeight: FontWeight.w800,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
                                           ],
-                                        ],
+                                        ),
                                       ),
-                                    ),
-                                  );
-                                }).toList(),
-                              ),
+                                    );
+                                  }).toList(),
+                                ),
 
-                              // Motif field
-                              if (needsReason) ...[
-                                const SizedBox(height: 14),
-                                TextFormField(
-                                  controller: _reasonController,
-                                  maxLines: 4,
-                                  style: TextStyle(
-                                    color: isDark ? Colors.white : _kNavy,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 14,
-                                  ),
-                                  decoration: InputDecoration(
-                                    labelText:
-                                        _selectedAction ==
-                                            ParcelStatusAction.rescheduled
-                                        ? 'Motif à relivrer'
-                                        : 'Motif retour expéditeur',
-                                    hintText:
-                                        _selectedAction ==
-                                            ParcelStatusAction.rescheduled
-                                        ? 'Ex : client absent, adresse fermée, appel sans réponse…'
-                                        : 'Ex : colis refusé, retour demandé par l\'expéditeur…',
-                                    prefixIcon: const Icon(
-                                      Icons.edit_note_rounded,
-                                      color: _kAmber,
-                                      size: 20,
-                                    ),
-                                    labelStyle: TextStyle(
-                                      color: isDark ? Colors.white54 : _kGrey,
+                                // Motif field
+                                if (needsReason) ...[
+                                  const SizedBox(height: 14),
+                                  TextFormField(
+                                    controller: _reasonController,
+                                    maxLines: 4,
+                                    style: TextStyle(
+                                      color: isDark ? Colors.white : _kNavy,
                                       fontWeight: FontWeight.w600,
+                                      fontSize: 14,
                                     ),
-                                    filled: true,
-                                    fillColor: isDark
-                                        ? Colors.white.withOpacity(0.04)
-                                        : const Color(0xFFF6F8FD),
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 14,
-                                    ),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                      borderSide: BorderSide.none,
-                                    ),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                      borderSide: BorderSide(
-                                        color: isDark
-                                            ? Colors.white.withOpacity(0.08)
-                                            : const Color(0xFFE4E9F4),
+                                    decoration: InputDecoration(
+                                      labelText:
+                                          _selectedAction ==
+                                              ParcelStatusAction.rescheduled
+                                          ? 'Motif à relivrer'
+                                          : 'Motif retour expéditeur',
+                                      hintText:
+                                          _selectedAction ==
+                                              ParcelStatusAction.rescheduled
+                                          ? 'Ex : client absent, adresse fermée, appel sans réponse…'
+                                          : 'Ex : colis refusé, retour demandé par l\'expéditeur…',
+                                      prefixIcon: const Icon(
+                                        Icons.edit_note_rounded,
+                                        color: _kAmber,
+                                        size: 20,
+                                      ),
+                                      labelStyle: TextStyle(
+                                        color: isDark ? Colors.white54 : _kGrey,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                      filled: true,
+                                      fillColor: isDark
+                                          ? Colors.white.withOpacity(0.04)
+                                          : const Color(0xFFF6F8FD),
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                            horizontal: 16,
+                                            vertical: 14,
+                                          ),
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                        borderSide: BorderSide.none,
+                                      ),
+                                      enabledBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                        borderSide: BorderSide(
+                                          color: isDark
+                                              ? Colors.white.withOpacity(0.08)
+                                              : const Color(0xFFE4E9F4),
+                                        ),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                        borderSide: const BorderSide(
+                                          color: _kAmber,
+                                          width: 1.8,
+                                        ),
                                       ),
                                     ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                      borderSide: const BorderSide(
-                                        color: _kAmber,
-                                        width: 1.8,
+                                  ),
+                                ],
+
+                                const SizedBox(height: 16),
+
+                                // Submit button
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 52,
+                                  child: ElevatedButton.icon(
+                                    onPressed: canSubmit ? _submitAction : null,
+                                    icon: _submitting
+                                        ? const SizedBox(
+                                            width: 18,
+                                            height: 18,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Colors.white,
+                                            ),
+                                          )
+                                        : const Icon(
+                                            Icons.save_rounded,
+                                            size: 18,
+                                          ),
+                                    label: Text(
+                                      _submitting
+                                          ? 'Enregistrement…'
+                                          : _selectedAction == null
+                                          ? 'Sélectionner une action'
+                                          : 'Enregistrer : ${_actionLabel(_selectedAction)}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: _kNavy,
+                                      foregroundColor: Colors.white,
+                                      disabledBackgroundColor: _kNavy
+                                          .withOpacity(0.35),
+                                      elevation: 0,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(14),
                                       ),
                                     ),
                                   ),
                                 ),
                               ],
-
-                              const SizedBox(height: 16),
-
-                              // Submit button
-                              SizedBox(
-                                width: double.infinity,
-                                height: 52,
-                                child: ElevatedButton.icon(
-                                  onPressed: canSubmit ? _submitAction : null,
-                                  icon: _submitting
-                                      ? const SizedBox(
-                                          width: 18,
-                                          height: 18,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Colors.white,
-                                          ),
-                                        )
-                                      : const Icon(
-                                          Icons.save_rounded,
-                                          size: 18,
-                                        ),
-                                  label: Text(
-                                    _submitting
-                                        ? 'Enregistrement…'
-                                        : _selectedAction == null
-                                        ? 'Sélectionner une action'
-                                        : 'Enregistrer : ${_actionLabel(_selectedAction)}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 15,
-                                    ),
-                                  ),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: _kNavy,
-                                    foregroundColor: Colors.white,
-                                    disabledBackgroundColor: _kNavy.withOpacity(
-                                      0.35,
-                                    ),
-                                    elevation: 0,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
-                        ),
                       ],
                     ),
             ),
@@ -1275,6 +1642,247 @@ class _MsgBanner extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _HistoryInlineLoader extends StatelessWidget {
+  const _HistoryInlineLoader();
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colors.white.withOpacity(0.04)
+            : const Color(0xFFF6F8FD),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isDark
+              ? Colors.white.withOpacity(0.08)
+              : const Color(0xFFE4E9F4),
+        ),
+      ),
+      child: const Row(
+        children: [
+          SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2, color: _kAmber),
+          ),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Chargement de l historique...',
+              style: TextStyle(
+                color: _kGrey,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryEmptyState extends StatelessWidget {
+  const _HistoryEmptyState({required this.isDark, required this.message});
+
+  final bool isDark;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 20),
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colors.white.withOpacity(0.03)
+            : const Color(0xFFF6F8FD),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark
+              ? Colors.white.withOpacity(0.06)
+              : const Color(0xFFE4E9F4),
+        ),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: _kAmber.withOpacity(0.10),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.history_rounded, color: _kAmber, size: 22),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Historique indisponible',
+            style: TextStyle(
+              color: isDark ? Colors.white : _kNavy,
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: isDark ? Colors.white60 : _kGrey,
+              fontSize: 12,
+              height: 1.45,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryEventTile extends StatelessWidget {
+  const _HistoryEventTile({
+    required this.isDark,
+    required this.title,
+    required this.note,
+    required this.date,
+    required this.icon,
+    required this.color,
+    required this.isNotification,
+    required this.isLast,
+  });
+
+  final bool isDark;
+  final String title;
+  final String note;
+  final String date;
+  final IconData icon;
+  final Color color;
+  final bool isNotification;
+  final bool isLast;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 42,
+          child: Column(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: color.withOpacity(0.24)),
+                ),
+                child: Icon(icon, color: color, size: 18),
+              ),
+              if (!isLast)
+                Container(
+                  width: 2,
+                  height: 56,
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? Colors.white.withOpacity(0.08)
+                        : const Color(0xFFE4E9F4),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Container(
+            margin: EdgeInsets.only(bottom: isLast ? 0 : 12),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isDark
+                  ? Colors.white.withOpacity(0.03)
+                  : const Color(0xFFF6F8FD),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: isDark
+                    ? Colors.white.withOpacity(0.06)
+                    : const Color(0xFFE4E9F4),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: TextStyle(
+                          color: isDark ? Colors.white : _kNavy,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    if (isNotification)
+                      Container(
+                        margin: const EdgeInsets.only(left: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: color.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          'Notif',
+                          style: TextStyle(
+                            color: color,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  date,
+                  style: TextStyle(
+                    color: isDark ? Colors.white54 : _kGrey,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (note.trim().isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    note,
+                    style: TextStyle(
+                      color: isDark ? Colors.white70 : _kNavy.withOpacity(0.78),
+                      fontSize: 12,
+                      height: 1.45,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
